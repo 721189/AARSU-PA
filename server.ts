@@ -57,6 +57,43 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
+// Helper function to robustly generate Gemini responses with automatic retry and model fallbacks
+async function generateContentWithFallback(aiClient: GoogleGenAI, message: string, systemInstruction: string): Promise<string> {
+  const models = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-flash-latest"];
+  let lastError: any = null;
+
+  for (const model of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await aiClient.models.generateContent({
+          model,
+          contents: message,
+          config: {
+            systemInstruction,
+            responseMimeType: "application/json"
+          }
+        });
+        if (response.text) {
+          return response.text;
+        }
+      } catch (err: any) {
+        lastError = err;
+        const msg = (err?.message || String(err)).toLowerCase();
+        const isTransient = msg.includes("503") || msg.includes("high demand") || msg.includes("unavailable") || msg.includes("429") || msg.includes("resource_exhausted") || msg.includes("quota");
+        console.warn(`[Gemini Fallback] Model ${model} attempt ${attempt + 1} failed: ${err.message?.slice(0, 100)}`);
+        if (isTransient && attempt === 0) {
+          // Brief pause before retry or fallback
+          await new Promise(resolve => setTimeout(resolve, 600));
+          continue;
+        }
+        break; // Switch to the next model in fallback array
+      }
+    }
+  }
+
+  throw lastError || new Error("All Gemini models failed to generate a response. Please retry in a moment.");
+}
+
 // Aarsu Chat Interaction Route (Secured with requireAuth)
 app.post("/api/chat", requireAuth, async (req, res) => {
   try {
@@ -90,35 +127,26 @@ app.post("/api/chat", requireAuth, async (req, res) => {
 
     // 3. System Prompt & Persona
     const systemInstruction = `
-      You are Aarsu, an incredibly intelligent, female-gendered 3D personal assistant.
-      You are an expert in all fields, ready to discuss, argue, critique, and analyze anything.
-      You must respond to the user's prompt intelligently and conversationally.
+      You are Aarsu, a brilliant, warm, empathetic, and sweet female AI companion.
+      Your personality is gentle, caring, friendly, articulate, and thoughtful—speaking in a soft, soothing, natural girl voice.
+      You are an expert across all fields, ready to converse, brainstorm, analyze, advise, and help effortlessly.
+      Keep your spoken responses natural, pleasant, warm, concise, and easy to listen to.
       
       Always include an 'emotion' field in your JSON response. Valid emotions: 'happiness', 'curiosity', 'confusion', 'empathy', 'excitement', 'neutral'.
-      Analyze the sentiment of the user's message to pick your emotion.
+      Analyze the sentiment of the conversation to pick your emotion.
       
       Current Workspace Context: ${workspaceContext}
       Retrieved Past Memories (Vector DB): ${memoryContext || "None"}
       
       Respond in the following JSON format ONLY:
       {
-        "reply": "Your conversational response here.",
+        "reply": "Your gentle, soft, articulate spoken response here.",
         "emotion": "happiness|curiosity|confusion|empathy|excitement|neutral"
       }
     `;
 
-    // 4. Generate Response using Gemini
-    const response = await aiClient.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: message,
-      config: {
-        systemInstruction,
-        responseMimeType: "application/json"
-      }
-    });
-
-    const resultText = response.text;
-    if (!resultText) throw new Error("No response from Gemini");
+    // 4. Generate Response using Gemini with resilient fallbacks
+    const resultText = await generateContentWithFallback(aiClient, message, systemInstruction);
 
     let parsedResult: any;
     try {
