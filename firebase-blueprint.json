@@ -1,0 +1,23 @@
+{
+  "collections": [
+    {
+      "collection_name": "users",
+      "document_id": "{uid}",
+      "fields": [
+        { "name": "role", "type": "string" },
+        { "name": "createdAt", "type": "timestamp" }
+      ],
+      "subcollections": [
+        {
+          "collection_name": "memories",
+          "document_id": "{memoryId}",
+          "fields": [
+            { "name": "text", "type": "string" },
+            { "name": "embedding", "type": "array" },
+            { "name": "timestamp", "type": "timestamp" }
+          ]
+        }
+      ]
+    }
+  ]
+}
