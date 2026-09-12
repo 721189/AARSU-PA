@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import { GoogleOAuthProvider } from '@react-oauth/google';
 import { AarsuAvatar } from './components/AarsuAvatar';
 import { ChatInterface } from './components/ChatInterface';
-import { Emotion } from './types';
+import { Emotion, SpeechViseme } from './types';
 import firebaseConfig from '../firebase-applet-config.json';
 import { MessageSquare } from 'lucide-react';
 
 export default function App() {
   const [emotion, setEmotion] = useState<Emotion>('neutral');
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [viseme, setViseme] = useState<SpeechViseme>({ isOpen: false, openness: 0, shape: 'rest' });
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const clientId = (firebaseConfig as any).oAuthClientId || import.meta.env.VITE_OAUTH_CLIENT_ID || 'dummy-client-id';
 
@@ -18,7 +19,7 @@ export default function App() {
         
         {/* ================= AARSU'S LIVING STAGE (EXACT VISUAL MATCH) ================= */}
         <div className={`relative flex-1 h-[44vh] md:h-full flex flex-col transition-all duration-300 ${chatCollapsed ? 'w-full' : ''}`}>
-          <AarsuAvatar emotion={emotion} isSpeaking={isSpeaking} />
+          <AarsuAvatar emotion={emotion} isSpeaking={isSpeaking} viseme={viseme} />
         </div>
 
         {/* ================= RIGHT DOCKED CHAT INTERFACE (NO TEXT OVER FACE) ================= */}
@@ -30,6 +31,7 @@ export default function App() {
           <ChatInterface 
             onEmotionChange={setEmotion} 
             onSpeakingChange={setIsSpeaking}
+            onVisemeChange={setViseme}
             isSpeaking={isSpeaking}
             emotion={emotion}
             isCollapsed={chatCollapsed}

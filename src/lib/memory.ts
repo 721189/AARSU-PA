@@ -55,33 +55,61 @@ export async function saveToMemory(uid: string, text: string, token: string) {
   }
 }
 
-// Retrieve relevant context using vector similarity
+// Retrieve relevant context using vector similarity, with keyword-based fallback
 export async function retrieveContext(uid: string, queryText: string, token: string, topK: number = 5): Promise<string> {
-  if (!uid || !token) return "";
+  if (!uid || !token || !queryText.trim()) return "";
   try {
     const queryEmbedding = await getEmbedding(queryText, token);
-    if (!queryEmbedding.length) return "";
     
-    // Fetch user memories
+    // Fetch recent user memories from Firestore
     const memoriesRef = collection(db, 'users', uid, 'memories');
-    const q = query(memoriesRef, orderBy('timestamp', 'desc'), limit(100));
+    const q = query(memoriesRef, orderBy('timestamp', 'desc'), limit(50));
     const snapshot = await getDocs(q);
       
     if (snapshot.empty) return "";
 
-    const scoredMemories = snapshot.docs.map(doc => {
-      const data = doc.data();
-      const score = cosineSimilarity(queryEmbedding, data.embedding || []);
-      return { text: data.text, score };
-    });
+    // If embedding vector was generated, perform cosine similarity
+    if (queryEmbedding && queryEmbedding.length > 0) {
+      const scoredMemories = snapshot.docs.map(doc => {
+        const data = doc.data();
+        const score = cosineSimilarity(queryEmbedding, data.embedding || []);
+        return { text: data.text as string, score };
+      });
 
-    // Sort by similarity and take topK
-    scoredMemories.sort((a, b) => b.score - a.score);
-    const topMemories = scoredMemories.slice(0, topK);
-    
-    return topMemories.map(m => m.text).join("\n");
+      scoredMemories.sort((a, b) => b.score - a.score);
+      const relevant = scoredMemories.filter(m => m.score > 0.4).slice(0, topK);
+      if (relevant.length > 0) {
+        return relevant.map(m => m.text).join("\n");
+      }
+    }
+
+    // Lexical / Keyword fallback (when embeddings are empty or quota-limited)
+    const terms = queryText
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(term => term.length > 2 && !['what', 'when', 'where', 'that', 'this', 'with', 'from', 'have', 'your', 'about'].includes(term));
+
+    if (terms.length > 0) {
+      const matched = snapshot.docs.map(doc => {
+        const text = (doc.data().text || "") as string;
+        const lower = text.toLowerCase();
+        let matches = 0;
+        for (const t of terms) {
+          if (lower.includes(t)) matches++;
+        }
+        return { text, matches };
+      }).filter(m => m.matches > 0);
+
+      matched.sort((a, b) => b.matches - a.matches);
+      if (matched.length > 0) {
+        return matched.slice(0, topK).map(m => m.text).join("\n");
+      }
+    }
+
+    // Default to the 2 most recent memories if no specific matches
+    return snapshot.docs.slice(0, 2).map(d => d.data().text as string).join("\n");
   } catch (error) {
-    console.error("Failed to retrieve context:", error);
+    console.warn("Soft memory retrieval notice:", error);
     return "";
   }
 }

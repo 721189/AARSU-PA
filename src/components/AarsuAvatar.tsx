@@ -1,14 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Emotion } from '../types';
+import { Emotion, SpeechViseme } from '../types';
 import aarsuImage from '../assets/images/aarsu_character_1789208513004.jpg';
 import { Sparkles, ZoomIn, ZoomOut } from 'lucide-react';
+import { HumanLipSync } from './HumanLipSync';
 
 interface AarsuAvatarProps {
   emotion: Emotion;
   isSpeaking?: boolean;
+  viseme?: SpeechViseme;
 }
 
-export function AarsuAvatar({ emotion, isSpeaking = false }: AarsuAvatarProps) {
+export function AarsuAvatar({ emotion, isSpeaking = false, viseme }: AarsuAvatarProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
@@ -163,36 +165,36 @@ export function AarsuAvatar({ emotion, isSpeaking = false }: AarsuAvatarProps) {
     };
   }, []);
 
-  // Compute 3D Perspective Rotation based on Smooth Mouse Tracking & Emotion
-  const getTransform = () => {
-    const rotY = smoothPos.x * 6; // Max 6 deg left/right
-    const rotX = -smoothPos.y * 4; // Max 4 deg up/down
-    
-    let emotionTiltZ = 0;
-    let emotionScale = 1;
+  // Compute 3D Perspective Gaze & Parallax Tracking
+  const getParallaxTransform = () => {
+    const rotY = smoothPos.x * 5.5; // Max 5.5 deg left/right gaze tracking
+    const rotX = -smoothPos.y * 3.5; // Max 3.5 deg up/down gaze tracking
+    return `perspective(1100px) rotateY(${rotY}deg) rotateX(${rotX}deg) scale(${isZoomed ? 1.45 : 1})`;
+  };
 
+  // Compute Subtle Organic Body & Head Pose Changes Based on Emotion State
+  const getEmotionPoseTransform = () => {
     switch (emotion) {
       case 'curiosity':
-        emotionTiltZ = 3.2; // Soft inquisitive tilt
-        break;
-      case 'confusion':
-        emotionTiltZ = -3.0; // Puzzled tilt
-        break;
-      case 'happiness':
-        emotionTiltZ = 1.0;
-        emotionScale = 1.015;
-        break;
+        // Attentive forward lean towards the user, inquisitive head tilt, chin lifted
+        return 'translateY(-10px) translateZ(30px) rotateZ(3.2deg) rotateY(2.2deg) rotateX(2.0deg) scale(1.02)';
       case 'empathy':
-        emotionTiltZ = 2.0;
-        break;
+        // Softening of the shoulders, gentle comforting head tilt, downward listening angle
+        return 'translateY(8px) translateZ(12px) rotateZ(-2.8deg) rotateY(-1.4deg) rotateX(-1.2deg) scale(1.012)';
+      case 'happiness':
+        // Buoyant upright posture, cheerful welcoming balance
+        return 'translateY(-7px) translateZ(16px) rotateZ(1.8deg) rotateY(0.8deg) rotateX(1.0deg) scale(1.024)';
       case 'excitement':
-        emotionScale = 1.02;
-        break;
+        // Alert upward lean, energetic forward anticipation
+        return 'translateY(-16px) translateZ(40px) rotateZ(2.2deg) rotateX(3.0deg) rotateY(1.6deg) scale(1.036)';
+      case 'confusion':
+        // Puzzled recoil back, quizzical head cock, slight lateral hesitation
+        return 'translateY(3px) translateZ(-18px) translateX(-7px) rotateZ(-5.4deg) rotateY(-3.8deg) rotateX(-1.8deg) scale(0.985)';
+      case 'neutral':
       default:
-        break;
+        // Poised, serene upright portrait posture
+        return 'translateY(0px) translateZ(0px) translateX(0px) rotateZ(0deg) rotateY(0deg) rotateX(0deg) scale(1)';
     }
-
-    return `perspective(1000px) rotateY(${rotY}deg) rotateX(${rotX}deg) rotateZ(${emotionTiltZ}deg) scale(${emotionScale * (isZoomed ? 1.45 : 1)})`;
   };
 
   return (
@@ -213,100 +215,92 @@ export function AarsuAvatar({ emotion, isSpeaking = false }: AarsuAvatarProps) {
       />
 
       {/* ================= 2. LIVING CHARACTER STAGE (AARSU) ================= */}
+      {/* Outer Parallax & Zoom Stage */}
       <div 
         className="relative transition-transform duration-200 ease-out will-change-transform flex items-center justify-center"
         style={{
-          transform: getTransform(),
+          transform: getParallaxTransform(),
           transformOrigin: isZoomed ? '50% 25%' : '50% 45%'
         }}
       >
-        {/* Breathing Animation Wrapper */}
-        <div className="relative animate-subtle-breathe">
-          
-          {/* Main High-Resolution Anime Portrait (Matching Reference Image Exactly) */}
-          <img 
-            src={aarsuImage} 
-            alt="Aarsu" 
-            referrerPolicy="no-referrer"
-            className="max-h-[86vh] md:max-h-[92vh] w-auto object-contain rounded-2xl shadow-2xl pointer-events-none select-none transition-all duration-300"
-            style={{
-              filter: isSpeaking 
-                ? 'drop-shadow(0 20px 45px rgba(244, 114, 182, 0.18)) brightness(1.02)' 
-                : 'drop-shadow(0 20px 40px rgba(0, 0, 0, 0.65))'
-            }}
-          />
-
-          {/* ================= NATURAL BLINKING OVERLAY ================= */}
-          {/* Synchronized over Aarsu's eyes to simulate natural human blinks */}
-          {isBlinking && (
-            <div 
-              className="absolute pointer-events-none transition-opacity duration-75"
+        {/* Emotion-Responsive Body & Head Pose Layer (Soft shoulder/torso pivoting) */}
+        <div 
+          className="relative transition-all duration-700 ease-[cubic-bezier(0.25,1,0.5,1)] will-change-transform flex items-center justify-center"
+          style={{
+            transform: getEmotionPoseTransform(),
+            transformOrigin: '50% 65%', // Upper chest & shoulders pivot for natural human postural lean
+          }}
+        >
+          {/* Natural Breathing & Speech Micro-Cadence Wrapper */}
+          <div className={`relative ${isSpeaking ? 'animate-speech-nod' : 'animate-subtle-breathe'}`}>
+            
+            {/* Main High-Resolution Anime Portrait (Matching Reference Image Exactly) */}
+            <img 
+              src={aarsuImage} 
+              alt="Aarsu" 
+              referrerPolicy="no-referrer"
+              className="max-h-[86vh] md:max-h-[92vh] w-auto object-contain rounded-2xl shadow-2xl pointer-events-none select-none transition-all duration-300"
               style={{
-                top: '25.6%',
-                left: '42.2%',
-                width: '18.4%',
-                height: '4.8%',
+                filter: isSpeaking 
+                  ? 'drop-shadow(0 20px 45px rgba(244, 114, 182, 0.18)) brightness(1.02)' 
+                  : 'drop-shadow(0 20px 40px rgba(0, 0, 0, 0.65))'
               }}
-            >
-              {/* Left Eyelid Curved Line */}
-              <div 
-                className="absolute left-[3%] top-[30%] w-[38%] h-[3px] rounded-full bg-[#52291d] shadow-sm"
-                style={{ transform: 'rotate(-4deg)' }}
-              />
-              {/* Right Eyelid Curved Line */}
-              <div 
-                className="absolute right-[3%] top-[30%] w-[38%] h-[3px] rounded-full bg-[#52291d] shadow-sm"
-                style={{ transform: 'rotate(4deg)' }}
-              />
-            </div>
-          )}
+            />
 
-          {/* ================= PHONETIC LIP-SYNC SPEAKING OVERLAY ================= */}
-          {/* Active only while Aarsu is speaking with her soft voice */}
-          {isSpeaking && (
-            <div 
-              className="absolute pointer-events-none flex items-center justify-center"
-              style={{
-                top: '32.6%',
-                left: '47.5%',
-                width: '5.8%',
-                height: '2.8%',
-              }}
-            >
-              {/* Animated Speaking Lip Curve */}
+            {/* ================= NATURAL BLINKING OVERLAY ================= */}
+            {/* Synchronized over Aarsu's eyes to simulate natural human blinks */}
+            {isBlinking && (
               <div 
-                className="w-full h-full rounded-full border-b-[2.5px] border-pink-700/80 bg-rose-500/25 animate-mouth-flutter backdrop-blur-[0.5px] transition-all"
+                className="absolute pointer-events-none transition-opacity duration-75"
                 style={{
-                  boxShadow: '0 1px 3px rgba(217, 67, 99, 0.4)'
+                  top: '25.6%',
+                  left: '42.2%',
+                  width: '18.4%',
+                  height: '4.8%',
+                }}
+              >
+                {/* Left Eyelid Curved Line */}
+                <div 
+                  className="absolute left-[3%] top-[30%] w-[38%] h-[3px] rounded-full bg-[#52291d] shadow-sm"
+                  style={{ transform: 'rotate(-4deg)' }}
+                />
+                {/* Right Eyelid Curved Line */}
+                <div 
+                  className="absolute right-[3%] top-[30%] w-[38%] h-[3px] rounded-full bg-[#52291d] shadow-sm"
+                  style={{ transform: 'rotate(4deg)' }}
+                />
+              </div>
+            )}
+
+            {/* ================= PRECISE HUMAN LIP-SYNC COMPONENT ================= */}
+            {/* Exact lip alignment (-7.4deg facial slant, anatomically anchored, oral cavity, teeth, tongue, vermilion pad) */}
+            <HumanLipSync isSpeaking={isSpeaking} viseme={viseme} />
+
+            {/* ================= EMOTION-REACTIVE AMBIENT ACCENTS ================= */}
+            {/* Rosy Blush Glow during Happiness & Excitement */}
+            {(emotion === 'happiness' || emotion === 'excitement') && (
+              <div 
+                className="absolute pointer-events-none transition-opacity duration-500 opacity-60"
+                style={{
+                  top: '27.5%',
+                  left: '38%',
+                  width: '26%',
+                  height: '5%',
+                  background: 'radial-gradient(ellipse at center, rgba(251, 113, 133, 0.35) 0%, transparent 75%)'
                 }}
               />
-            </div>
-          )}
+            )}
 
-          {/* ================= EMOTION-REACTIVE AMBIENT ACCENTS ================= */}
-          {/* Rosy Blush Glow during Happiness & Excitement */}
-          {(emotion === 'happiness' || emotion === 'excitement') && (
-            <div 
-              className="absolute pointer-events-none transition-opacity duration-500 opacity-60"
-              style={{
-                top: '27.5%',
-                left: '38%',
-                width: '26%',
-                height: '5%',
-                background: 'radial-gradient(ellipse at center, rgba(251, 113, 133, 0.35) 0%, transparent 75%)'
-              }}
-            />
-          )}
-
-          {/* Soft Golden Aura Rim for Speaking Voice */}
-          {isSpeaking && (
-            <div 
-              className="absolute inset-0 rounded-2xl pointer-events-none transition-opacity duration-300 ring-1 ring-pink-400/20"
-              style={{
-                background: 'radial-gradient(circle at 50% 30%, rgba(244, 114, 182, 0.08) 0%, transparent 60%)'
-              }}
-            />
-          )}
+            {/* Soft Golden Aura Rim for Speaking Voice */}
+            {isSpeaking && (
+              <div 
+                className="absolute inset-0 rounded-2xl pointer-events-none transition-opacity duration-300 ring-1 ring-pink-400/20"
+                style={{
+                  background: 'radial-gradient(circle at 50% 30%, rgba(244, 114, 182, 0.08) 0%, transparent 60%)'
+                }}
+              />
+            )}
+          </div>
         </div>
       </div>
 

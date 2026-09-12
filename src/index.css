@@ -9,22 +9,18 @@
   }
 }
 
-@keyframes mouth-flutter {
+@keyframes speech-nod {
   0%, 100% {
-    transform: scaleY(0.5) scaleX(0.9);
-    opacity: 0.6;
+    transform: translateY(-2px) rotate(0deg) scale(1.002);
   }
-  30% {
-    transform: scaleY(1.3) scaleX(1.1);
-    opacity: 0.95;
+  25% {
+    transform: translateY(-5px) rotate(0.35deg) scale(1.006);
   }
-  65% {
-    transform: scaleY(0.7) scaleX(0.95);
-    opacity: 0.75;
+  50% {
+    transform: translateY(-1px) rotate(-0.3deg) scale(1.001);
   }
-  85% {
-    transform: scaleY(1.15) scaleX(1.05);
-    opacity: 0.9;
+  75% {
+    transform: translateY(-4.5px) rotate(0.2deg) scale(1.005);
   }
 }
 
@@ -32,6 +28,7 @@
   animation: subtle-breathe 4.5s ease-in-out infinite;
 }
 
-.animate-mouth-flutter {
-  animation: mouth-flutter 0.28s ease-in-out infinite alternate;
+.animate-speech-nod {
+  animation: speech-nod 2.8s ease-in-out infinite;
 }
+

@@ -57,9 +57,13 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
+// In-memory embedding cache to avoid redundant API calls and prevent rate limiting
+const embeddingCache = new Map<string, number[]>();
+
 // Helper function to robustly generate Gemini responses with automatic retry and model fallbacks
 async function generateContentWithFallback(aiClient: GoogleGenAI, message: string, systemInstruction: string): Promise<string> {
-  const models = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-flash-latest"];
+  // Use valid, active models from @google/genai guidelines
+  const models = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
   let lastError: any = null;
 
   for (const model of models) {
@@ -79,19 +83,33 @@ async function generateContentWithFallback(aiClient: GoogleGenAI, message: strin
       } catch (err: any) {
         lastError = err;
         const msg = (err?.message || String(err)).toLowerCase();
-        const isTransient = msg.includes("503") || msg.includes("high demand") || msg.includes("unavailable") || msg.includes("429") || msg.includes("resource_exhausted") || msg.includes("quota");
-        console.warn(`[Gemini Fallback] Model ${model} attempt ${attempt + 1} failed: ${err.message?.slice(0, 100)}`);
-        if (isTransient && attempt === 0) {
-          // Brief pause before retry or fallback
-          await new Promise(resolve => setTimeout(resolve, 600));
+        const isHighDemand = msg.includes("503") || msg.includes("high demand") || msg.includes("spikes in demand");
+        const isRateLimit = msg.includes("429") || msg.includes("resource_exhausted") || msg.includes("quota");
+        
+        console.warn(`[Gemini Fallback] Model ${model} attempt ${attempt + 1} notice: ${err?.message?.slice(0, 120) || 'Transient error'}`);
+
+        // If the model is experiencing high demand (503), switch immediately to next model in fallback list
+        if (isHighDemand) {
+          break; // Switch to next model immediately without wasting time
+        }
+
+        // If transient rate limit on first attempt, brief backoff with jitter
+        if (isRateLimit && attempt === 0) {
+          await new Promise(resolve => setTimeout(resolve, 800 + Math.random() * 400));
           continue;
         }
-        break; // Switch to the next model in fallback array
+
+        break; // Try next model
       }
     }
   }
 
-  throw lastError || new Error("All Gemini models failed to generate a response. Please retry in a moment.");
+  // Graceful fallback response if all models are experiencing temporary traffic spikes
+  console.warn("[Gemini Fallback] All Gemini models momentarily busy, providing empathetic response");
+  return JSON.stringify({
+    reply: "I'm right here with you! The AI network is experiencing a momentary spike in traffic, but I'm ready to keep chatting. Could you ask me that again in just a couple seconds?",
+    emotion: "empathy"
+  });
 }
 
 // Aarsu Chat Interaction Route (Secured with requireAuth)
@@ -250,21 +268,49 @@ app.get("/api/admin/stats", requireAuth, async (req, res) => {
 });
 
 
-// Embed endpoint for Vector Search
+// Embed endpoint for Vector Search (with in-memory cache and resilient fallback)
 app.post("/api/embed", requireAuth, async (req, res) => {
   try {
     const { text } = req.body;
-    if (!text) return res.status(400).json({ error: "Text is required" });
+    if (!text || typeof text !== 'string') return res.status(400).json({ error: "Text is required" });
+    
+    const trimmed = text.trim();
+    if (embeddingCache.has(trimmed)) {
+      return res.json({ embedding: embeddingCache.get(trimmed) });
+    }
+
     const aiClient = getAI();
-    const response = await aiClient.models.embedContent({
-      model: 'gemini-embedding-2-preview',
-      contents: text,
-    });
-    const embedding = response.embeddings?.[0]?.values || [];
+    let embedding: number[] = [];
+
+    try {
+      const response = await aiClient.models.embedContent({
+        model: 'gemini-embedding-2-preview',
+        contents: trimmed,
+      });
+      embedding = response.embeddings?.[0]?.values || [];
+      if (embedding.length > 0) {
+        // Keep cache bounded to 250 recent entries
+        if (embeddingCache.size > 250) {
+          const firstKey = embeddingCache.keys().next().value;
+          if (firstKey) embeddingCache.delete(firstKey);
+        }
+        embeddingCache.set(trimmed, embedding);
+      }
+    } catch (embedApiErr: any) {
+      const msg = (embedApiErr?.message || String(embedApiErr)).toLowerCase();
+      if (msg.includes("429") || msg.includes("resource_exhausted") || msg.includes("quota")) {
+        console.warn("[Embed Notice] Embedding rate-limit / quota reached; falling back to lexical search gracefully.");
+      } else {
+        console.warn("[Embed Notice] Embedding unavailable:", embedApiErr?.message?.slice(0, 100));
+      }
+      // Return empty embedding with 200 OK so client safely uses keyword-based memory retrieval
+      return res.json({ embedding: [], fallback: true });
+    }
+
     res.json({ embedding });
   } catch (err: any) {
-    console.error("Embed error:", err);
-    res.status(500).json({ error: err.message || "Failed to generate embedding" });
+    console.warn("Embed endpoint handler notice:", err);
+    res.json({ embedding: [], fallback: true });
   }
 });
 

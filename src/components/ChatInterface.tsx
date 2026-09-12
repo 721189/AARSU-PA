@@ -21,13 +21,14 @@ import {
   Headphones,
   Check
 } from 'lucide-react';
-import { ChatMessage, Emotion } from '../types';
+import { ChatMessage, Emotion, SpeechViseme } from '../types';
 import { signInWithGoogle, initAuth, auth } from '../lib/firebase';
 import { saveToMemory, retrieveContext } from '../lib/memory';
 
 interface ChatInterfaceProps {
   onEmotionChange: (emotion: Emotion) => void;
   onSpeakingChange?: (isSpeaking: boolean) => void;
+  onVisemeChange?: (viseme: SpeechViseme) => void;
   isSpeaking?: boolean;
   emotion?: Emotion;
   isCollapsed?: boolean;
@@ -79,6 +80,7 @@ const SOFTNESS_PRESETS: Record<SoftnessPresetKey, SoftnessPreset> = {
 export function ChatInterface({ 
   onEmotionChange, 
   onSpeakingChange,
+  onVisemeChange,
   isSpeaking = false,
   emotion = 'neutral',
   onToggleCollapse
@@ -100,6 +102,19 @@ export function ChatInterface({
   const [proactiveSuggestions, setProactiveSuggestions] = useState<string[]>([]);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const visemeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const speechIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Clean up speech timers on unmount
+  useEffect(() => {
+    return () => {
+      if (visemeTimeoutRef.current) clearTimeout(visemeTimeoutRef.current);
+      if (speechIntervalRef.current) clearInterval(speechIntervalRef.current);
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
 
   // Monitor Firebase Auth State
   useEffect(() => {
@@ -253,6 +268,10 @@ export function ChatInterface({
 
     if (!cleanText) return;
 
+    // Clear any active timers
+    if (visemeTimeoutRef.current) clearTimeout(visemeTimeoutRef.current);
+    if (speechIntervalRef.current) clearInterval(speechIntervalRef.current);
+
     const utterance = new SpeechSynthesisUtterance(cleanText);
     const preset = SOFTNESS_PRESETS[selectedPreset];
 
@@ -278,17 +297,90 @@ export function ChatInterface({
     utterance.rate = preset.rate;
     utterance.volume = preset.volume;
 
+    const stopLipSync = () => {
+      if (visemeTimeoutRef.current) clearTimeout(visemeTimeoutRef.current);
+      if (speechIntervalRef.current) clearInterval(speechIntervalRef.current);
+      onVisemeChange?.({ isOpen: false, openness: 0, shape: 'rest' });
+      onSpeakingChange?.(false);
+    };
+
+    // Analyze spoken words to determine realistic anime lip shapes and openness
+    const getWordViseme = (word: string): { shape: 'A' | 'O' | 'E'; openness: number } => {
+      const lower = word.toLowerCase();
+      // Round vowels: o, oo, u, w
+      if (/[ou]|oo|ow|round/.test(lower)) {
+        return { shape: 'O', openness: 0.7 };
+      }
+      // Stretched/smile vowels: e, ee, i, y
+      if (/[ei]|ee|ay|igh/.test(lower)) {
+        return { shape: 'E', openness: 0.55 };
+      }
+      // Open vowels: a, ah, ar
+      if (/[a]|ah|ar|aw/.test(lower)) {
+        return { shape: 'A', openness: 0.85 };
+      }
+      return { shape: 'A', openness: 0.6 };
+    };
+
+    // Track word boundaries for precise word-to-lip matching
+    utterance.onboundary = (event: SpeechSynthesisEvent) => {
+      if (event.name === 'word' || (event as any).charIndex !== undefined) {
+        const charIdx = event.charIndex || 0;
+        const sub = cleanText.slice(charIdx);
+        const match = sub.match(/^[^\s,.;:!?]+/);
+        const currentWord = match ? match[0] : '';
+        const { shape, openness } = getWordViseme(currentWord);
+
+        // Open lips for the syllable
+        onVisemeChange?.({
+          isOpen: true,
+          openness,
+          shape,
+          currentWord,
+        });
+
+        // Articulate: smooth syllable dip
+        if (visemeTimeoutRef.current) clearTimeout(visemeTimeoutRef.current);
+        visemeTimeoutRef.current = setTimeout(() => {
+          onVisemeChange?.({
+            isOpen: true,
+            openness: openness * 0.25,
+            shape: 'rest',
+            currentWord,
+          });
+        }, 120);
+      } else if (event.name === 'sentence') {
+        // Natural pause at sentence end
+        onVisemeChange?.({ isOpen: false, openness: 0, shape: 'rest' });
+      }
+    };
+
     utterance.onstart = () => {
       onSpeakingChange?.(true);
+      // Rhythmic cadence fallback ensuring lips continue moving smoothly with audio even if onboundary events are batched
+      let beat = 0;
+      speechIntervalRef.current = setInterval(() => {
+        beat++;
+        const mod = beat % 4;
+        if (mod === 0) {
+          onVisemeChange?.({ isOpen: true, openness: 0.75, shape: 'A' });
+        } else if (mod === 1) {
+          onVisemeChange?.({ isOpen: true, openness: 0.45, shape: 'E' });
+        } else if (mod === 2) {
+          onVisemeChange?.({ isOpen: true, openness: 0.65, shape: 'O' });
+        } else {
+          onVisemeChange?.({ isOpen: true, openness: 0.1, shape: 'rest' });
+        }
+      }, 150);
     };
 
     utterance.onend = () => {
-      onSpeakingChange?.(false);
+      stopLipSync();
     };
 
     utterance.onerror = (e) => {
       console.warn("Speech synthesis notice:", e);
-      onSpeakingChange?.(false);
+      stopLipSync();
     };
 
     window.speechSynthesis.speak(utterance);
@@ -366,13 +458,24 @@ export function ChatInterface({
       }
       
     } catch (err: any) {
-      console.error(err);
-      onEmotionChange('confusion');
+      console.warn("Chat interaction notice:", err);
+      onEmotionChange('empathy');
+      
+      let friendlyError = "I'm right here with you! Could you please try sending that again in just a moment?";
+      const msg = (err?.message || '').toLowerCase();
+      if (msg.includes("503") || msg.includes("high demand") || msg.includes("spikes in demand")) {
+        friendlyError = "The AI service is experiencing a brief surge in traffic right now. Please ask me again in just a few seconds!";
+      } else if (msg.includes("429") || msg.includes("resource_exhausted") || msg.includes("quota")) {
+        friendlyError = "We temporarily reached our speed limit. Please wait a brief moment before sending another message.";
+      } else if (err?.message && !err.message.includes("{") && !err.message.includes("ApiError") && !err.message.includes("Server Error: 500")) {
+        friendlyError = err.message;
+      }
+
       setMessages(prev => [...prev, { 
         id: Date.now().toString(), 
         sender: 'aarsu', 
-        text: `I'm having a slight moment: ${err.message || 'Please check your connection and try again.'}`, 
-        emotion: 'confusion', 
+        text: friendlyError, 
+        emotion: 'empathy', 
         timestamp: new Date() 
       }]);
     } finally {
