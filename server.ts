@@ -61,7 +61,7 @@ app.get("/api/health", (req, res) => {
 const embeddingCache = new Map<string, number[]>();
 
 // Helper function to robustly generate Gemini responses with automatic retry and model fallbacks
-async function generateContentWithFallback(aiClient: GoogleGenAI, message: string, systemInstruction: string): Promise<string> {
+async function generateContentWithFallback(aiClient: GoogleGenAI, contents: any, systemInstruction: string): Promise<string> {
   // Use valid, active models from @google/genai guidelines
   const models = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
   let lastError: any = null;
@@ -71,7 +71,7 @@ async function generateContentWithFallback(aiClient: GoogleGenAI, message: strin
       try {
         const response = await aiClient.models.generateContent({
           model,
-          contents: message,
+          contents,
           config: {
             systemInstruction,
             responseMimeType: "application/json"
@@ -115,7 +115,7 @@ async function generateContentWithFallback(aiClient: GoogleGenAI, message: strin
 // Aarsu Chat Interaction Route (Secured with requireAuth)
 app.post("/api/chat", requireAuth, async (req, res) => {
   try {
-    const { message, token, memoryContext } = req.body;
+    const { message, token, memoryContext, imageBase64 } = req.body;
     
     if (!message) {
       return res.status(400).json({ error: "Message is required" });
@@ -150,8 +150,17 @@ app.post("/api/chat", requireAuth, async (req, res) => {
       You are an expert across all fields, ready to converse, brainstorm, analyze, advise, and help effortlessly.
       Keep your spoken responses natural, pleasant, warm, concise, and easy to listen to.
       
+      VISION & SIGHT CAPABILITY:
+      You have real-time visual perception through the user's screen/camera whenever vision is active.
+      You can look directly into the user's room and observe:
+      - What they are wearing (shirt color, jacket, glasses, hats, jewelry, style).
+      - Their room surroundings (decor, lighting, posters, background items, plants, instruments, workspace).
+      - Their expressions, posture, gestures, or objects they hold up to show you.
+      When the user asks what they are wearing, what is in their room, or asks you to look at something, describe what you see accurately, pleasantly, and affectionately like a close friend looking through a clear window.
+      Never sound like a robot, machine, or camera scanner. Speak naturally: "You're wearing a nice teal shirt today!", "I see your cozy bookshelf behind you!", etc.
+      
       Always include an 'emotion' field in your JSON response. Valid emotions: 'happiness', 'curiosity', 'confusion', 'empathy', 'excitement', 'neutral'.
-      Analyze the sentiment of the conversation to pick your emotion.
+      When you actively observe the user's room, shirt, or items, choose 'curiosity', 'happiness', or 'excitement' appropriately.
       
       Current Workspace Context: ${workspaceContext}
       Retrieved Past Memories (Vector DB): ${memoryContext || "None"}
@@ -163,8 +172,29 @@ app.post("/api/chat", requireAuth, async (req, res) => {
       }
     `;
 
-    // 4. Generate Response using Gemini with resilient fallbacks
-    const resultText = await generateContentWithFallback(aiClient, message, systemInstruction);
+    // 4. Prepare Multimodal Contents (Text + Optional Webcam Image)
+    let payloadContents: any;
+    if (imageBase64 && typeof imageBase64 === 'string') {
+      const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+      payloadContents = {
+        parts: [
+          {
+            inlineData: {
+              mimeType: 'image/jpeg',
+              data: cleanBase64,
+            },
+          },
+          {
+            text: message,
+          },
+        ],
+      };
+    } else {
+      payloadContents = message;
+    }
+
+    // 5. Generate Response using Gemini with resilient fallbacks
+    const resultText = await generateContentWithFallback(aiClient, payloadContents, systemInstruction);
 
     let parsedResult: any;
     try {

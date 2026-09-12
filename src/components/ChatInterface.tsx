@@ -24,11 +24,13 @@ import {
 import { ChatMessage, Emotion, SpeechViseme } from '../types';
 import { signInWithGoogle, initAuth, auth } from '../lib/firebase';
 import { saveToMemory, retrieveContext } from '../lib/memory';
+import { VisionManager, VisionManagerHandle } from './VisionManager';
 
 interface ChatInterfaceProps {
   onEmotionChange: (emotion: Emotion) => void;
   onSpeakingChange?: (isSpeaking: boolean) => void;
   onVisemeChange?: (viseme: SpeechViseme) => void;
+  onVisionStatusChange?: (active: boolean) => void;
   isSpeaking?: boolean;
   emotion?: Emotion;
   isCollapsed?: boolean;
@@ -81,6 +83,7 @@ export function ChatInterface({
   onEmotionChange, 
   onSpeakingChange,
   onVisemeChange,
+  onVisionStatusChange,
   isSpeaking = false,
   emotion = 'neutral',
   onToggleCollapse
@@ -91,6 +94,7 @@ export function ChatInterface({
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [isVisionActive, setIsVisionActive] = useState(false);
   
   // Voice Controls State
   const [voiceEnabled, setVoiceEnabled] = useState(true);
@@ -104,6 +108,7 @@ export function ChatInterface({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const visemeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const speechIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const visionRef = useRef<VisionManagerHandle>(null);
 
   // Clean up speech timers on unmount
   useEffect(() => {
@@ -425,13 +430,28 @@ export function ChatInterface({
         memoryContext = await retrieveContext(uid, text, currentToken);
       }
 
+      // If vision is active, capture real-time webcam frame of the user/room
+      let imageBase64: string | null = null;
+      if (visionRef.current?.isVisionActive) {
+        imageBase64 = visionRef.current.captureSnapshot();
+        if (imageBase64) {
+          // Set attentive curiosity emotion right away while analyzing visual input
+          onEmotionChange('curiosity');
+        }
+      }
+
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${currentToken}`
         },
-        body: JSON.stringify({ message: text, token: workspaceToken, memoryContext })
+        body: JSON.stringify({ 
+          message: text, 
+          token: workspaceToken, 
+          memoryContext,
+          imageBase64
+        })
       });
       
       if (!res.ok) {
@@ -558,7 +578,19 @@ export function ChatInterface({
           </div>
 
           {/* Top Right Action Icons */}
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
+            {/* Vision Sight Manager (Let Aarsu See You) */}
+            <VisionManager
+              ref={visionRef}
+              onVisionStatusChange={(active) => {
+                setIsVisionActive(active);
+                onVisionStatusChange?.(active);
+                if (active) {
+                  onEmotionChange('curiosity');
+                }
+              }}
+            />
+
             {/* Soft Voice Tuning Toggle */}
             <button
               onClick={() => setShowVoiceSettings(!showVoiceSettings)}
@@ -756,6 +788,23 @@ export function ChatInterface({
             <p className="text-xs text-slate-400 max-w-xs leading-relaxed">
               Her face is right beside you on stage. Type or tap the microphone to speak, and she will respond in her soft, gentle girl voice!
             </p>
+
+            {/* Quick Vision & Sight Suggestion Chips */}
+            <div className="flex flex-wrap gap-1.5 justify-center mt-2 max-w-xs">
+              <button
+                onClick={() => handleSend("What color shirt am I wearing?")}
+                className="px-2.5 py-1 rounded-full bg-slate-800/90 hover:bg-slate-750 border border-slate-700 text-slate-300 hover:text-pink-200 text-[11px] transition-colors"
+              >
+                👁️ "What color is my shirt?"
+              </button>
+              <button
+                onClick={() => handleSend("What do you see in my room?")}
+                className="px-2.5 py-1 rounded-full bg-slate-800/90 hover:bg-slate-750 border border-slate-700 text-slate-300 hover:text-pink-200 text-[11px] transition-colors"
+              >
+                🛋️ "What do you see in my room?"
+              </button>
+            </div>
+
             <button
               onClick={testSoftVoice}
               className="mt-2 px-3 py-1.5 rounded-full bg-slate-800 hover:bg-slate-750 border border-slate-700 text-pink-300 text-xs flex items-center gap-1.5 shadow-sm transition-colors"

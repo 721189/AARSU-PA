@@ -1,16 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Emotion, SpeechViseme } from '../types';
 import aarsuImage from '../assets/images/aarsu_character_1789208513004.jpg';
-import { Sparkles, ZoomIn, ZoomOut } from 'lucide-react';
+import { Sparkles, ZoomIn, ZoomOut, Eye } from 'lucide-react';
 import { HumanLipSync } from './HumanLipSync';
 
 interface AarsuAvatarProps {
   emotion: Emotion;
   isSpeaking?: boolean;
   viseme?: SpeechViseme;
+  isVisionActive?: boolean;
 }
 
-export function AarsuAvatar({ emotion, isSpeaking = false, viseme }: AarsuAvatarProps) {
+export function AarsuAvatar({ emotion, isSpeaking = false, viseme, isVisionActive = false }: AarsuAvatarProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
@@ -333,6 +334,18 @@ export function AarsuAvatar({ emotion, isSpeaking = false, viseme }: AarsuAvatar
             </span>
           )}
         </div>
+
+        {/* Vision Sight Active Indicator */}
+        {isVisionActive && (
+          <div className="px-2.5 py-1 rounded-full bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-[11px] flex items-center gap-1.5 shadow-lg backdrop-blur-md animate-in fade-in duration-300">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <Eye className="w-3 h-3 text-emerald-400" />
+            <span className="font-medium text-[10px]">Aarsu is looking</span>
+          </div>
+        )}
       </div>
     </div>
   );

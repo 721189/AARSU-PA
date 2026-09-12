@@ -2,7 +2,8 @@
   "name": "Aarsu",
   "description": "An intelligent 3D personal assistant with Google Workspace integration, enterprise security, and proactive task management.",
   "requestFramePermissions": [
-    "microphone"
+    "microphone",
+    "camera"
   ],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

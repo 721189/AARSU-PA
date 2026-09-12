@@ -11,6 +11,7 @@ export default function App() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [viseme, setViseme] = useState<SpeechViseme>({ isOpen: false, openness: 0, shape: 'rest' });
   const [chatCollapsed, setChatCollapsed] = useState(false);
+  const [isVisionActive, setIsVisionActive] = useState(false);
   const clientId = (firebaseConfig as any).oAuthClientId || import.meta.env.VITE_OAUTH_CLIENT_ID || 'dummy-client-id';
 
   return (
@@ -19,7 +20,12 @@ export default function App() {
         
         {/* ================= AARSU'S LIVING STAGE (EXACT VISUAL MATCH) ================= */}
         <div className={`relative flex-1 h-[44vh] md:h-full flex flex-col transition-all duration-300 ${chatCollapsed ? 'w-full' : ''}`}>
-          <AarsuAvatar emotion={emotion} isSpeaking={isSpeaking} viseme={viseme} />
+          <AarsuAvatar 
+            emotion={emotion} 
+            isSpeaking={isSpeaking} 
+            viseme={viseme}
+            isVisionActive={isVisionActive} 
+          />
         </div>
 
         {/* ================= RIGHT DOCKED CHAT INTERFACE (NO TEXT OVER FACE) ================= */}
@@ -32,6 +38,7 @@ export default function App() {
             onEmotionChange={setEmotion} 
             onSpeakingChange={setIsSpeaking}
             onVisemeChange={setViseme}
+            onVisionStatusChange={setIsVisionActive}
             isSpeaking={isSpeaking}
             emotion={emotion}
             isCollapsed={chatCollapsed}
