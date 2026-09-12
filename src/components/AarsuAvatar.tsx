@@ -1,17 +1,25 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Emotion, SpeechViseme } from '../types';
+import { Emotion, SpeechViseme, MicroExpression } from '../types';
 import aarsuImage from '../assets/images/aarsu_character_1789208513004.jpg';
 import { Sparkles, ZoomIn, ZoomOut, Eye } from 'lucide-react';
 import { HumanLipSync } from './HumanLipSync';
+import { MicroExpressionOverlay } from './MicroExpressionOverlay';
 
 interface AarsuAvatarProps {
   emotion: Emotion;
   isSpeaking?: boolean;
   viseme?: SpeechViseme;
   isVisionActive?: boolean;
+  activeMicroExpression?: MicroExpression;
 }
 
-export function AarsuAvatar({ emotion, isSpeaking = false, viseme, isVisionActive = false }: AarsuAvatarProps) {
+export function AarsuAvatar({ 
+  emotion, 
+  isSpeaking = false, 
+  viseme, 
+  isVisionActive = false,
+  activeMicroExpression
+}: AarsuAvatarProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
@@ -22,6 +30,11 @@ export function AarsuAvatar({ emotion, isSpeaking = false, viseme, isVisionActiv
 
   // Natural Blinking State
   const [isBlinking, setIsBlinking] = useState(false);
+
+  // Autonomous Micro-Expressions System (for natural pauses and lifelike presence)
+  const [currentMicroExpression, setCurrentMicroExpression] = useState<MicroExpression>('none');
+  const [microIntensity, setMicroIntensity] = useState(0);
+  const microTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Mouse / Touch Move Listener for 2.5D Parallax
   useEffect(() => {
@@ -83,6 +96,85 @@ export function AarsuAvatar({ emotion, isSpeaking = false, viseme, isVisionActiv
     timeout = setTimeout(triggerBlink, 2800);
     return () => clearTimeout(timeout);
   }, []);
+
+  // Sync explicitly passed micro-expression (e.g. from speech pause or user interaction)
+  useEffect(() => {
+    if (activeMicroExpression && activeMicroExpression !== 'none') {
+      setCurrentMicroExpression(activeMicroExpression);
+      setMicroIntensity(1);
+    }
+  }, [activeMicroExpression]);
+
+  // Autonomous Micro-Expressions System: Triggers eye-widening, brow-furrowing, and soft squinting during natural pauses
+  useEffect(() => {
+    // When speaking constantly, micro-expressions naturally yield to active articulation
+    if (isSpeaking) {
+      if (currentMicroExpression !== 'none' && !activeMicroExpression) {
+        setMicroIntensity(0.3);
+        const t = setTimeout(() => {
+          setCurrentMicroExpression('none');
+          setMicroIntensity(0);
+        }, 400);
+        return () => clearTimeout(t);
+      }
+      return;
+    }
+
+    // When in a pause between sentences or in idle conversation:
+    let isCancelled = false;
+
+    const scheduleNextMicroExpression = () => {
+      // Natural conversational pause duration before subtle face micro-movement: 2.5s to 5.5s
+      const delay = 2400 + Math.random() * 3200;
+      
+      microTimerRef.current = setTimeout(() => {
+        if (isCancelled) return;
+
+        // Choose appropriate human micro-expression conditioned on current emotional state
+        let candidate: MicroExpression = 'none';
+        if (emotion === 'curiosity') {
+          const options: MicroExpression[] = ['eye_widening', 'brow_raise', 'inquisitive_tilt'];
+          candidate = options[Math.floor(Math.random() * options.length)];
+        } else if (emotion === 'confusion') {
+          const options: MicroExpression[] = ['brow_furrow', 'deep_thought', 'brow_raise'];
+          candidate = options[Math.floor(Math.random() * options.length)];
+        } else if (emotion === 'happiness' || emotion === 'excitement') {
+          const options: MicroExpression[] = ['soft_smile_squint', 'eye_widening', 'warm_crinkle'];
+          candidate = options[Math.floor(Math.random() * options.length)];
+        } else if (emotion === 'empathy') {
+          const options: MicroExpression[] = ['brow_furrow', 'soft_smile_squint', 'warm_crinkle'];
+          candidate = options[Math.floor(Math.random() * options.length)];
+        } else {
+          // Neutral / Thoughtful idle listening
+          const options: MicroExpression[] = ['brow_furrow', 'eye_widening', 'brow_raise', 'deep_thought', 'soft_smile_squint'];
+          candidate = options[Math.floor(Math.random() * options.length)];
+        }
+
+        setCurrentMicroExpression(candidate);
+        setMicroIntensity(0.85 + Math.random() * 0.15);
+
+        // Micro-expressions are fleeting in real humans: held for 600ms - 1400ms then smoothly relax
+        const duration = 750 + Math.random() * 650;
+        setTimeout(() => {
+          if (isCancelled) return;
+          setMicroIntensity(0);
+          setTimeout(() => {
+            if (isCancelled) return;
+            setCurrentMicroExpression('none');
+            scheduleNextMicroExpression();
+          }, 350);
+        }, duration);
+
+      }, delay);
+    };
+
+    scheduleNextMicroExpression();
+
+    return () => {
+      isCancelled = true;
+      if (microTimerRef.current) clearTimeout(microTimerRef.current);
+    };
+  }, [isSpeaking, emotion, activeMicroExpression]);
 
   // Floating Golden Dust Particles Canvas (matching the classroom sunbeam particles in the image)
   useEffect(() => {
@@ -173,29 +265,49 @@ export function AarsuAvatar({ emotion, isSpeaking = false, viseme, isVisionActiv
     return `perspective(1100px) rotateY(${rotY}deg) rotateX(${rotX}deg) scale(${isZoomed ? 1.45 : 1})`;
   };
 
-  // Compute Subtle Organic Body & Head Pose Changes Based on Emotion State
+  // Compute Subtle Organic Body & Head Pose Changes Based on Emotion State + Micro-Expressions
   const getEmotionPoseTransform = () => {
+    let baseTransform = '';
     switch (emotion) {
       case 'curiosity':
         // Attentive forward lean towards the user, inquisitive head tilt, chin lifted
-        return 'translateY(-10px) translateZ(30px) rotateZ(3.2deg) rotateY(2.2deg) rotateX(2.0deg) scale(1.02)';
+        baseTransform = 'translateY(-10px) translateZ(30px) rotateZ(3.2deg) rotateY(2.2deg) rotateX(2.0deg) scale(1.02)';
+        break;
       case 'empathy':
         // Softening of the shoulders, gentle comforting head tilt, downward listening angle
-        return 'translateY(8px) translateZ(12px) rotateZ(-2.8deg) rotateY(-1.4deg) rotateX(-1.2deg) scale(1.012)';
+        baseTransform = 'translateY(8px) translateZ(12px) rotateZ(-2.8deg) rotateY(-1.4deg) rotateX(-1.2deg) scale(1.012)';
+        break;
       case 'happiness':
         // Buoyant upright posture, cheerful welcoming balance
-        return 'translateY(-7px) translateZ(16px) rotateZ(1.8deg) rotateY(0.8deg) rotateX(1.0deg) scale(1.024)';
+        baseTransform = 'translateY(-7px) translateZ(16px) rotateZ(1.8deg) rotateY(0.8deg) rotateX(1.0deg) scale(1.024)';
+        break;
       case 'excitement':
         // Alert upward lean, energetic forward anticipation
-        return 'translateY(-16px) translateZ(40px) rotateZ(2.2deg) rotateX(3.0deg) rotateY(1.6deg) scale(1.036)';
+        baseTransform = 'translateY(-16px) translateZ(40px) rotateZ(2.2deg) rotateX(3.0deg) rotateY(1.6deg) scale(1.036)';
+        break;
       case 'confusion':
         // Puzzled recoil back, quizzical head cock, slight lateral hesitation
-        return 'translateY(3px) translateZ(-18px) translateX(-7px) rotateZ(-5.4deg) rotateY(-3.8deg) rotateX(-1.8deg) scale(0.985)';
+        baseTransform = 'translateY(3px) translateZ(-18px) translateX(-7px) rotateZ(-5.4deg) rotateY(-3.8deg) rotateX(-1.8deg) scale(0.985)';
+        break;
       case 'neutral':
       default:
         // Poised, serene upright portrait posture
-        return 'translateY(0px) translateZ(0px) translateX(0px) rotateZ(0deg) rotateY(0deg) rotateX(0deg) scale(1)';
+        baseTransform = 'translateY(0px) translateZ(0px) translateX(0px) rotateZ(0deg) rotateY(0deg) rotateX(0deg) scale(1)';
+        break;
     }
+
+    // Layer subtle head micro-nudges when micro-expressions trigger during pauses
+    if (currentMicroExpression === 'inquisitive_tilt' || currentMicroExpression === 'brow_raise') {
+      return `${baseTransform} rotateZ(${1.5 * microIntensity}deg) translateY(${-3 * microIntensity}px)`;
+    }
+    if (currentMicroExpression === 'deep_thought' || currentMicroExpression === 'brow_furrow') {
+      return `${baseTransform} rotateX(${-1.4 * microIntensity}deg) translateY(${2 * microIntensity}px)`;
+    }
+    if (currentMicroExpression === 'eye_widening') {
+      return `${baseTransform} translateZ(${8 * microIntensity}px) translateY(${-2 * microIntensity}px)`;
+    }
+
+    return baseTransform;
   };
 
   return (
@@ -277,6 +389,13 @@ export function AarsuAvatar({ emotion, isSpeaking = false, viseme, isVisionActiv
             {/* Exact lip alignment (-7.4deg facial slant, anatomically anchored, oral cavity, teeth, tongue, vermilion pad) */}
             <HumanLipSync isSpeaking={isSpeaking} viseme={viseme} />
 
+            {/* ================= DYNAMIC ANATOMICAL MICRO-EXPRESSIONS OVERLAY ================= */}
+            {/* Eye-widening pupil highlights, glabellar brow-furrows, asymmetric brow raises, and soft smile squints */}
+            <MicroExpressionOverlay 
+              expression={currentMicroExpression} 
+              intensity={microIntensity} 
+            />
+
             {/* ================= EMOTION-REACTIVE AMBIENT ACCENTS ================= */}
             {/* Rosy Blush Glow during Happiness & Excitement */}
             {(emotion === 'happiness' || emotion === 'excitement') && (
@@ -324,10 +443,15 @@ export function AarsuAvatar({ emotion, isSpeaking = false, viseme, isVisionActiv
           <span className="hidden sm:inline font-medium text-[11px]">{isZoomed ? 'Full View' : 'Focus Face'}</span>
         </button>
 
-        {/* Emotion Indicator Pill (Minimal, non-intrusive) */}
+        {/* Emotion & Micro-Expression Indicator Pill (Minimal, non-intrusive) */}
         <div className="px-3 py-1 rounded-full bg-slate-900/80 backdrop-blur-md border border-slate-700/60 text-slate-300 text-[11px] flex items-center gap-1.5 shadow-lg">
           <Sparkles className="w-3 h-3 text-amber-400" />
           <span className="capitalize text-slate-200 font-medium">{emotion}</span>
+          {currentMicroExpression !== 'none' && !isSpeaking && (
+            <span className="text-[10px] text-amber-300/90 font-normal transition-opacity duration-300">
+              • {currentMicroExpression.replace(/_/g, ' ')}
+            </span>
+          )}
           {isSpeaking && (
             <span className="flex items-center gap-1 text-pink-400 font-medium ml-1">
               • <span className="w-1.5 h-1.5 rounded-full bg-pink-400 animate-ping" />

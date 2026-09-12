@@ -2,12 +2,13 @@ import React, { useState } from 'react';
 import { GoogleOAuthProvider } from '@react-oauth/google';
 import { AarsuAvatar } from './components/AarsuAvatar';
 import { ChatInterface } from './components/ChatInterface';
-import { Emotion, SpeechViseme } from './types';
+import { Emotion, SpeechViseme, MicroExpression } from './types';
 import firebaseConfig from '../firebase-applet-config.json';
 import { MessageSquare } from 'lucide-react';
 
 export default function App() {
   const [emotion, setEmotion] = useState<Emotion>('neutral');
+  const [microExpression, setMicroExpression] = useState<MicroExpression>('none');
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [viseme, setViseme] = useState<SpeechViseme>({ isOpen: false, openness: 0, shape: 'rest' });
   const [chatCollapsed, setChatCollapsed] = useState(false);
@@ -25,6 +26,7 @@ export default function App() {
             isSpeaking={isSpeaking} 
             viseme={viseme}
             isVisionActive={isVisionActive} 
+            activeMicroExpression={microExpression}
           />
         </div>
 
@@ -39,6 +41,7 @@ export default function App() {
             onSpeakingChange={setIsSpeaking}
             onVisemeChange={setViseme}
             onVisionStatusChange={setIsVisionActive}
+            onMicroExpressionChange={setMicroExpression}
             isSpeaking={isSpeaking}
             emotion={emotion}
             isCollapsed={chatCollapsed}

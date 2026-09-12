@@ -31,6 +31,7 @@ interface ChatInterfaceProps {
   onSpeakingChange?: (isSpeaking: boolean) => void;
   onVisemeChange?: (viseme: SpeechViseme) => void;
   onVisionStatusChange?: (active: boolean) => void;
+  onMicroExpressionChange?: (expression: import('../types').MicroExpression) => void;
   isSpeaking?: boolean;
   emotion?: Emotion;
   isCollapsed?: boolean;
@@ -84,6 +85,7 @@ export function ChatInterface({
   onSpeakingChange,
   onVisemeChange,
   onVisionStatusChange,
+  onMicroExpressionChange,
   isSpeaking = false,
   emotion = 'neutral',
   onToggleCollapse
@@ -355,8 +357,19 @@ export function ChatInterface({
           });
         }, 120);
       } else if (event.name === 'sentence') {
-        // Natural pause at sentence end
+        // Natural pause at sentence end: close lips and trigger lifelike micro-expression pause
         onVisemeChange?.({ isOpen: false, openness: 0, shape: 'rest' });
+        
+        // During natural pauses between spoken sentences, trigger micro-expression based on emotion
+        const pauseMicro = (emotion === 'curiosity' || emotion === 'excitement')
+          ? 'eye_widening'
+          : (emotion === 'confusion' || emotion === 'neutral')
+            ? 'brow_furrow'
+            : 'soft_smile_squint';
+        onMicroExpressionChange?.(pauseMicro);
+        setTimeout(() => {
+          onMicroExpressionChange?.('none');
+        }, 700);
       }
     };
 
@@ -422,6 +435,9 @@ export function ChatInterface({
     setInput('');
     setIsLoading(true);
 
+    // Natural conversation pause: User just finished speaking, Aarsu attentively pauses and ponders
+    onMicroExpressionChange?.('brow_furrow');
+
     try {
       const uid = auth.currentUser?.uid;
       
@@ -471,6 +487,11 @@ export function ChatInterface({
       
       setMessages(prev => [...prev, aiMsg]);
       onEmotionChange((data.emotion as Emotion) || 'neutral');
+      // Natural transition: momentary eye-widening recognition before talking
+      onMicroExpressionChange?.('eye_widening');
+      setTimeout(() => {
+        onMicroExpressionChange?.('none');
+      }, 450);
       speak(data.reply);
       
       if (uid) {

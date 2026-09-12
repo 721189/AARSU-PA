@@ -63,7 +63,8 @@ const embeddingCache = new Map<string, number[]>();
 // Helper function to robustly generate Gemini responses with automatic retry and model fallbacks
 async function generateContentWithFallback(aiClient: GoogleGenAI, contents: any, systemInstruction: string): Promise<string> {
   // Use valid, active models from @google/genai guidelines
-  const models = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
+  // gemini-3.1-flash-lite has the highest availability and rate capacity
+  const models = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-flash-latest"];
   let lastError: any = null;
 
   for (const model of models) {
@@ -88,14 +89,14 @@ async function generateContentWithFallback(aiClient: GoogleGenAI, contents: any,
         
         console.warn(`[Gemini Fallback] Model ${model} attempt ${attempt + 1} notice: ${err?.message?.slice(0, 120) || 'Transient error'}`);
 
-        // If the model is experiencing high demand (503), switch immediately to next model in fallback list
-        if (isHighDemand) {
-          break; // Switch to next model immediately without wasting time
+        // If the model is experiencing high demand (503) or rate limit (429), switch immediately to next model in fallback list
+        if (isHighDemand || isRateLimit) {
+          break; // Switch to next model immediately without blocking
         }
 
-        // If transient rate limit on first attempt, brief backoff with jitter
-        if (isRateLimit && attempt === 0) {
-          await new Promise(resolve => setTimeout(resolve, 800 + Math.random() * 400));
+        // For other transient network glitches, try second attempt
+        if (attempt === 0) {
+          await new Promise(resolve => setTimeout(resolve, 300));
           continue;
         }
 
@@ -105,7 +106,7 @@ async function generateContentWithFallback(aiClient: GoogleGenAI, contents: any,
   }
 
   // Graceful fallback response if all models are experiencing temporary traffic spikes
-  console.warn("[Gemini Fallback] All Gemini models momentarily busy, providing empathetic response");
+  console.warn("[Gemini Fallback] All Gemini models momentarily busy, providing empathetic response. Last error:", lastError?.message?.slice(0, 120));
   return JSON.stringify({
     reply: "I'm right here with you! The AI network is experiencing a momentary spike in traffic, but I'm ready to keep chatting. Could you ask me that again in just a couple seconds?",
     emotion: "empathy"
