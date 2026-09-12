@@ -15,27 +15,30 @@ function cosineSimilarity(A: number[], B: number[]) {
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-// Generate embedding using the backend proxy
+// Generate embedding using the backend proxy with timeout & graceful fallback
 export async function getEmbedding(text: string, token: string): Promise<number[]> {
   if (!text || !token) return [];
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2500);
+
     const res = await fetch('/api/embed', {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({ text })
-    });
+      body: JSON.stringify({ text }),
+      signal: controller.signal
+    }).finally(() => clearTimeout(timeoutId));
+
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      console.warn("Embedding generation notice:", err.error || res.statusText);
       return [];
     }
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     return data.embedding || [];
-  } catch (err) {
-    console.error("Embedding generation error:", err);
+  } catch (_err) {
+    // Soft fallback: silently return empty embedding so keyword-based semantic retrieval takes over instantly
     return [];
   }
 }

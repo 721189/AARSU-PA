@@ -315,7 +315,7 @@ app.post("/api/embed", requireAuth, async (req, res) => {
 
     try {
       const response = await aiClient.models.embedContent({
-        model: 'gemini-embedding-2-preview',
+        model: 'text-embedding-004',
         contents: trimmed,
       });
       embedding = response.embeddings?.[0]?.values || [];
@@ -332,7 +332,7 @@ app.post("/api/embed", requireAuth, async (req, res) => {
       if (msg.includes("429") || msg.includes("resource_exhausted") || msg.includes("quota")) {
         console.warn("[Embed Notice] Embedding rate-limit / quota reached; falling back to lexical search gracefully.");
       } else {
-        console.warn("[Embed Notice] Embedding unavailable:", embedApiErr?.message?.slice(0, 100));
+        console.warn("[Embed Notice] Embedding unavailable, using lexical search fallback.");
       }
       // Return empty embedding with 200 OK so client safely uses keyword-based memory retrieval
       return res.json({ embedding: [], fallback: true });
