@@ -3,12 +3,93 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Google AI Studio App</title>
-    <meta name="description" content="An application built with Google AI Studio." />
-    <meta property="og:title" content="My Google AI Studio App" />
-    <meta property="og:description" content="An application built with Google AI Studio." />
+    <title>Aarsu</title>
+    <meta name="description" content="An intelligent 3D personal assistant with Google Workspace integration, enterprise security, and proactive task management." />
+    <meta property="og:title" content="Aarsu" />
+    <meta property="og:description" content="An intelligent 3D personal assistant with Google Workspace integration, enterprise security, and proactive task management." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <script>
+      (function() {
+        // Suppress Vite HMR WebSocket connection errors in environments where HMR is disabled
+        const OriginalWebSocket = window.WebSocket;
+        if (OriginalWebSocket) {
+          window.WebSocket = function(url, protocols) {
+            const isViteHMR = protocols === 'vite-hmr' || 
+              (Array.isArray(protocols) && protocols.includes('vite-hmr')) ||
+              (typeof url === 'string' && (url.includes('vite-hmr') || url.includes('token=')));
+
+            if (isViteHMR) {
+              const listeners = {};
+              const dummyWs = {
+                OPEN: 1,
+                CONNECTING: 0,
+                CLOSING: 2,
+                CLOSED: 3,
+                readyState: 1,
+                protocol: 'vite-hmr',
+                url: String(url),
+                binaryType: 'blob',
+                bufferedAmount: 0,
+                extensions: '',
+                onopen: null,
+                onclose: null,
+                onerror: null,
+                onmessage: null,
+                send: function() {},
+                close: function() {},
+                addEventListener: function(type, fn, opts) {
+                  if (!listeners[type]) listeners[type] = [];
+                  listeners[type].push({ fn, once: opts && opts.once });
+                  if (type === 'open') {
+                    setTimeout(() => {
+                      if (typeof fn === 'function') fn({ type: 'open', target: dummyWs });
+                    }, 0);
+                  }
+                },
+                removeEventListener: function(type, fn) {
+                  if (listeners[type]) {
+                    listeners[type] = listeners[type].filter(item => item.fn !== fn);
+                  }
+                },
+                dispatchEvent: function() { return true; }
+              };
+              setTimeout(() => {
+                if (typeof dummyWs.onopen === 'function') {
+                  dummyWs.onopen({ type: 'open', target: dummyWs });
+                }
+              }, 0);
+              return dummyWs;
+            }
+            return new OriginalWebSocket(url, protocols);
+          };
+          window.WebSocket.prototype = OriginalWebSocket.prototype;
+          window.WebSocket.OPEN = 1;
+          window.WebSocket.CONNECTING = 0;
+          window.WebSocket.CLOSING = 2;
+          window.WebSocket.CLOSED = 3;
+        }
+
+        // Catch and prevent unhandled rejections from Vite WebSocket disconnects
+        window.addEventListener('unhandledrejection', function(event) {
+          const reason = event.reason;
+          const msg = (reason && (reason.message || String(reason))) || '';
+          if (msg.includes('WebSocket closed without opened') || msg.includes('failed to connect to websocket')) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        }, true);
+
+        // Filter out Vite WebSocket logs from console.error to keep the dev environment clean
+        const origError = console.error;
+        console.error = function(...args) {
+          if (args[0] && typeof args[0] === 'string' && args[0].includes('[vite] failed to connect to websocket')) {
+            return;
+          }
+          origError.apply(console, args);
+        };
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

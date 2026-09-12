@@ -1,5 +1,4 @@
 import cron from 'node-cron';
-import * as admin from 'firebase-admin';
 
 export function startBackupCron() {
   // Run daily at 2:00 AM

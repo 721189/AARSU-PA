@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useGoogleLogin } from '@react-oauth/google';
 import { Mic, Send, Mail, Calendar, HardDrive, FileText, Loader2, PlaySquare, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { ChatMessage, Emotion } from '../types';
-import { signInWithGoogle, auth } from '../lib/firebase';
+import { signInWithGoogle, initAuth, auth } from '../lib/firebase';
+import { saveToMemory, retrieveContext } from '../lib/memory';
 
 interface ChatInterfaceProps {
   onEmotionChange: (emotion: Emotion) => void;
@@ -14,21 +15,22 @@ export function ChatInterface({ onEmotionChange }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isListening, setIsListening] = useState(false);
   const [proactiveSuggestions, setProactiveSuggestions] = useState<string[]>([]);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Monitor Firebase Auth State
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(async (user) => {
-      if (user) {
-        const token = await user.getIdToken();
-        setFirebaseToken(token);
-      } else {
+    const unsubscribe = initAuth(
+      (user, token) => {
+        user.getIdToken().then(setFirebaseToken);
+      },
+      () => {
         setFirebaseToken(null);
       }
-    });
-    return unsubscribe;
+    );
+    return () => unsubscribe();
   }, []);
 
   const loginWorkspace = useGoogleLogin({
@@ -43,9 +45,10 @@ export function ChatInterface({ onEmotionChange }: ChatInterfaceProps) {
 
   const handleSecureLogin = async () => {
     try {
-      const user = await signInWithGoogle();
-      const token = await user.getIdToken();
-      setFirebaseToken(token);
+      const result = await signInWithGoogle();
+      if (result) {
+        setFirebaseToken(result.accessToken);
+      }
     } catch (error) {
       console.error("Firebase Auth Error", error);
     }
@@ -83,7 +86,24 @@ export function ChatInterface({ onEmotionChange }: ChatInterfaceProps) {
   };
 
   const handleSend = async (text: string = input) => {
-    if (!text.trim() || !firebaseToken) return;
+    if (!text.trim()) return;
+    
+    let currentToken = firebaseToken;
+    if (auth.currentUser) {
+      try {
+        currentToken = await auth.currentUser.getIdToken();
+        setFirebaseToken(currentToken);
+      } catch (err) {
+        console.warn("Could not refresh token:", err);
+      }
+    }
+
+    if (!currentToken) {
+      setMessages(prev => [...prev, { id: Date.now().toString(), sender: 'user', text, timestamp: new Date() }]);
+      setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), sender: 'aarsu', text: "Access Denied. I cannot process your request without secure authentication. Please click 'Secure Login Required' above.", emotion: 'neutral', timestamp: new Date() }]);
+      setInput('');
+      return;
+    }
     
     const userMsg: ChatMessage = { id: Date.now().toString(), sender: 'user', text, timestamp: new Date() };
     setMessages(prev => [...prev, userMsg]);
@@ -91,17 +111,25 @@ export function ChatInterface({ onEmotionChange }: ChatInterfaceProps) {
     setIsLoading(true);
 
     try {
+      const uid = auth.currentUser?.uid;
+      
+      let memoryContext = "";
+      if (uid) {
+        memoryContext = await retrieveContext(uid, text, currentToken);
+      }
+
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${firebaseToken}`
+          'Authorization': `Bearer ${currentToken}`
         },
-        body: JSON.stringify({ message: text, token: workspaceToken })
+        body: JSON.stringify({ message: text, token: workspaceToken, memoryContext })
       });
       
       if (!res.ok) {
-        throw new Error('Unauthorized or Server Error');
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Server Error: ${res.status}`);
       }
 
       const data = await res.json();
@@ -118,10 +146,14 @@ export function ChatInterface({ onEmotionChange }: ChatInterfaceProps) {
       onEmotionChange(data.emotion as Emotion);
       speak(data.reply);
       
-    } catch (err) {
+      if (uid) {
+        saveToMemory(uid, `User: ${text} | Aarsu: ${data.reply}`, currentToken);
+      }
+      
+    } catch (err: any) {
       console.error(err);
       onEmotionChange('confusion');
-      setMessages(prev => [...prev, { id: Date.now().toString(), sender: 'aarsu', text: "Access Denied. Please ensure you are authenticated securely.", emotion: 'confusion', timestamp: new Date() }]);
+      setMessages(prev => [...prev, { id: Date.now().toString(), sender: 'aarsu', text: `An error occurred: ${err.message || 'Please check your connection.'}`, emotion: 'confusion', timestamp: new Date() }]);
     } finally {
       setIsLoading(false);
     }
@@ -132,14 +164,44 @@ export function ChatInterface({ onEmotionChange }: ChatInterfaceProps) {
   }, [messages]);
 
   const startListening = () => {
+    if (!firebaseToken) {
+      setMessages(prev => [...prev, { id: Date.now().toString(), sender: 'aarsu', text: "Authentication required. Please click 'Secure Login Required' above to enable voice and text input.", emotion: 'neutral', timestamp: new Date() }]);
+      return;
+    }
+    
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (SpeechRecognition) {
+      if (isListening) return; // Prevent multiple instances
+      
       const recognition = new SpeechRecognition();
-      recognition.onresult = (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        setInput(transcript);
-        handleSend(transcript);
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      
+      recognition.onstart = () => {
+        setIsListening(true);
       };
+
+      recognition.onresult = (event: any) => {
+        const transcript = Array.from(event.results)
+          .map((result: any) => result[0].transcript)
+          .join('');
+        
+        setInput(transcript);
+
+        if (event.results[0].isFinal) {
+          handleSend(transcript);
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error("Speech recognition error", event.error);
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
       recognition.start();
     } else {
       alert("Speech recognition is not supported in this browser.");
@@ -231,8 +293,7 @@ export function ChatInterface({ onEmotionChange }: ChatInterfaceProps) {
           <div className="p-3 bg-slate-900/90 border-t border-slate-800 flex gap-2">
             <button 
               onClick={startListening}
-              disabled={!firebaseToken}
-              className="p-3 rounded-full bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white transition-colors disabled:opacity-50"
+              className={`p-3 rounded-full transition-colors ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white'}`}
             >
               <Mic className="w-5 h-5" />
             </button>
@@ -242,12 +303,11 @@ export function ChatInterface({ onEmotionChange }: ChatInterfaceProps) {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSend()}
               placeholder={firebaseToken ? "Message Aarsu..." : "Login securely to chat..."}
-              disabled={!firebaseToken}
-              className="flex-1 bg-slate-800 border border-slate-700 rounded-full px-4 text-white focus:outline-none focus:border-indigo-500 transition-colors disabled:opacity-50"
+              className="flex-1 bg-slate-800 border border-slate-700 rounded-full px-4 text-white focus:outline-none focus:border-indigo-500 transition-colors"
             />
             <button 
               onClick={() => handleSend()}
-              disabled={!input.trim() || isLoading || !firebaseToken}
+              disabled={!input.trim() || isLoading}
               className="p-3 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:hover:bg-indigo-600"
             >
               <Send className="w-5 h-5" />

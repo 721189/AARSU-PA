@@ -11,10 +11,14 @@ interface AarsuAvatarProps {
 export function AarsuAvatar({ emotion }: AarsuAvatarProps) {
   const meshRef = useRef<THREE.Mesh>(null);
   const materialRef = useRef<any>(null);
+  const timeRef = useRef(0);
 
-  useFrame((state) => {
+  useFrame((state, delta) => {
     if (!meshRef.current || !materialRef.current) return;
-    const time = state.clock.getElapsedTime();
+    
+    // Accumulate time manually instead of state.clock.getElapsedTime()
+    timeRef.current += delta;
+    const time = timeRef.current;
 
     // Base properties
     let targetDistort = 0.3;

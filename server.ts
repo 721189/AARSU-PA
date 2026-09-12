@@ -6,12 +6,12 @@ import rateLimit from "express-rate-limit";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { google } from "googleapis";
-import { requireAuth, requireRole } from "./src/server/auth";
-import { saveToMemory, retrieveContext } from "./src/server/memory";
+import { requireAuth } from "./src/server/auth";
 import { startBackupCron } from "./src/server/backup";
 
 // --- Enterprise Security Setup ---
 const app = express();
+app.set('trust proxy', 1);
 const PORT = 3000;
 
 // Security Middleware
@@ -60,17 +60,13 @@ app.get("/api/health", (req, res) => {
 // Aarsu Chat Interaction Route (Secured with requireAuth)
 app.post("/api/chat", requireAuth, async (req, res) => {
   try {
-    const { message, token } = req.body;
-    const uid = req.user!.uid; // Injected by requireAuth
+    const { message, token, memoryContext } = req.body;
     
     if (!message) {
       return res.status(400).json({ error: "Message is required" });
     }
 
     const aiClient = getAI();
-
-    // 1. Vector DB Memory retrieval (Context injection)
-    const memoryContext = await retrieveContext(uid, message, 5);
     
     // 2. Fetch User Context from Workspace (if token available)
     let workspaceContext = "";
@@ -102,7 +98,7 @@ app.post("/api/chat", requireAuth, async (req, res) => {
       Analyze the sentiment of the user's message to pick your emotion.
       
       Current Workspace Context: ${workspaceContext}
-      Retrieved Past Memories (Vector DB): ${memoryContext}
+      Retrieved Past Memories (Vector DB): ${memoryContext || "None"}
       
       Respond in the following JSON format ONLY:
       {
@@ -113,7 +109,7 @@ app.post("/api/chat", requireAuth, async (req, res) => {
 
     // 4. Generate Response using Gemini
     const response = await aiClient.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.8-flash",
       contents: message,
       config: {
         systemInstruction,
@@ -124,15 +120,16 @@ app.post("/api/chat", requireAuth, async (req, res) => {
     const resultText = response.text;
     if (!resultText) throw new Error("No response from Gemini");
 
-    let parsedResult;
+    let parsedResult: any;
     try {
       parsedResult = JSON.parse(resultText);
     } catch(e) {
       parsedResult = { reply: resultText, emotion: "neutral" };
     }
 
-    // 5. Save to Long-Term Memory via Vector DB Service
-    await saveToMemory(uid, `User: ${message} | Aarsu: ${parsedResult.reply}`);
+    if (!parsedResult.reply && (parsedResult.message || parsedResult.text || parsedResult.response)) {
+      parsedResult.reply = parsedResult.message || parsedResult.text || parsedResult.response;
+    }
 
     res.json(parsedResult);
   } catch (error: any) {
@@ -217,15 +214,36 @@ app.post("/api/proactive", requireAuth, async (req, res) => {
 });
 
 // Admin Route (Example of RBAC)
-app.get("/api/admin/stats", requireAuth, requireRole('admin'), async (req, res) => {
+app.get("/api/admin/stats", requireAuth, async (req, res) => {
+  if (req.userRole !== 'admin') {
+    return res.status(403).json({ error: "Forbidden" });
+  }
   res.json({ message: "Welcome Admin! System is operating normally." });
 });
 
 
+// Embed endpoint for Vector Search
+app.post("/api/embed", requireAuth, async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: "Text is required" });
+    const aiClient = getAI();
+    const response = await aiClient.models.embedContent({
+      model: 'gemini-embedding-2-preview',
+      contents: text,
+    });
+    const embedding = response.embeddings?.[0]?.values || [];
+    res.json({ embedding });
+  } catch (err: any) {
+    console.error("Embed error:", err);
+    res.status(500).json({ error: err.message || "Failed to generate embedding" });
+  }
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: false },
       appType: "spa",
     });
     app.use(vite.middlewares);

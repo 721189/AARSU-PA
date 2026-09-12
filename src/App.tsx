@@ -5,10 +5,11 @@ import { GoogleOAuthProvider } from '@react-oauth/google';
 import { AarsuAvatar } from './components/AarsuAvatar';
 import { ChatInterface } from './components/ChatInterface';
 import { Emotion } from './types';
+import firebaseConfig from '../firebase-applet-config.json';
 
 export default function App() {
   const [emotion, setEmotion] = useState<Emotion>('neutral');
-  const clientId = import.meta.env.VITE_OAUTH_CLIENT_ID || 'dummy-client-id';
+  const clientId = (firebaseConfig as any).oAuthClientId || import.meta.env.VITE_OAUTH_CLIENT_ID || 'dummy-client-id';
 
   return (
     <GoogleOAuthProvider clientId={clientId}>

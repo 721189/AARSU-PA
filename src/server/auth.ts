@@ -1,19 +1,25 @@
-import * as admin from 'firebase-admin';
+import { initializeApp, getApps } from 'firebase-admin/app';
+import { getAuth, DecodedIdToken } from 'firebase-admin/auth';
 import { Request, Response, NextFunction } from 'express';
+import * as fs from 'fs';
+import * as path from 'path';
+
+// Load the active Firebase config for this environment
+const firebaseConfigPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
+const firebaseConfig = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf8'));
 
 // Initialize Firebase Admin (uses default credentials securely in AI Studio / Cloud Run)
-if (!admin.apps.length) {
-  admin.initializeApp({
-    projectId: 'gen-lang-client-0526957989',
+if (!getApps().length) {
+  initializeApp({
+    projectId: firebaseConfig.projectId,
   });
 }
-export const db = admin.firestore();
 
 // Extend Request to include user
 declare global {
   namespace Express {
     interface Request {
-      user?: admin.auth.DecodedIdToken;
+      user?: DecodedIdToken;
       userRole?: string;
     }
   }
@@ -28,21 +34,11 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
 
   const token = authHeader.split('Bearer ')[1];
   try {
-    const decodedToken = await admin.auth().verifyIdToken(token);
+    const decodedToken = await getAuth().verifyIdToken(token);
     req.user = decodedToken;
     
-    // Fetch user role from Firestore for RBAC
-    const userDoc = await db.collection('users').doc(decodedToken.uid).get();
-    if (userDoc.exists) {
-      req.userRole = userDoc.data()?.role || 'user';
-    } else {
-      // Create default user profile if it doesn't exist
-      await db.collection('users').doc(decodedToken.uid).set({
-        role: 'user',
-        createdAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-      req.userRole = 'user';
-    }
+    // Defaulting role to 'user' since we removed Admin DB access
+    req.userRole = 'user';
     
     next();
   } catch (error) {
