@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { GoogleOAuthProvider } from '@react-oauth/google';
 import { AarsuAvatar } from './components/AarsuAvatar';
 import { ChatInterface } from './components/ChatInterface';
+import { JarvisHud } from './components/JarvisHud';
 import { Emotion, SpeechViseme, MicroExpression } from './types';
 import firebaseConfig from '../firebase-applet-config.json';
+import { initAuth } from './lib/firebase';
 import { MessageSquare } from 'lucide-react';
 
 export default function App() {
@@ -13,7 +15,34 @@ export default function App() {
   const [viseme, setViseme] = useState<SpeechViseme>({ isOpen: false, openness: 0, shape: 'rest' });
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [isVisionActive, setIsVisionActive] = useState(false);
+  const [firebaseToken, setFirebaseToken] = useState<string | null>(null);
   const clientId = (firebaseConfig as any).oAuthClientId || import.meta.env.VITE_OAUTH_CLIENT_ID || 'dummy-client-id';
+
+  useEffect(() => {
+    const unsubscribe = initAuth(
+      (user) => {
+        user.getIdToken().then(setFirebaseToken);
+      },
+      () => {
+        setFirebaseToken(null);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  const handleVocalize = (text?: string) => {
+    if (!text || typeof text !== 'string') return;
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const cleaned = text.replace(/[*#_`]/g, '').slice(0, 300).trim();
+      if (!cleaned) return;
+      const utterance = new SpeechSynthesisUtterance(cleaned);
+      utterance.onstart = () => setIsSpeaking(true);
+      utterance.onend = () => setIsSpeaking(false);
+      utterance.onerror = () => setIsSpeaking(false);
+      window.speechSynthesis.speak(utterance);
+    }
+  };
 
   return (
     <GoogleOAuthProvider clientId={clientId}>
@@ -27,6 +56,12 @@ export default function App() {
             viseme={viseme}
             isVisionActive={isVisionActive} 
             activeMicroExpression={microExpression}
+          />
+          {/* Iron Man JARVIS Holographic HUD Layer */}
+          <JarvisHud 
+            token={firebaseToken} 
+            onVocalize={handleVocalize} 
+            isSpeaking={isSpeaking} 
           />
         </div>
 

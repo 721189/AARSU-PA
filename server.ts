@@ -8,6 +8,8 @@ import { GoogleGenAI } from "@google/genai";
 import { google } from "googleapis";
 import { requireAuth } from "./src/server/auth";
 import { startBackupCron } from "./src/server/backup";
+import { IronLegionOrchestrator } from "./src/server/agentOrchestrator";
+import { jarvisGraph } from "./src/lib/knowledgeGraph";
 
 // --- Enterprise Security Setup ---
 const app = express();
@@ -425,6 +427,177 @@ app.get("/api/fs/workspace", requireAuth, async (req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to query workspace state" });
+  }
+});
+
+// --- JARVIS Live Google Search Grounding Endpoint ---
+app.post("/api/jarvis/search", requireAuth, async (req, res) => {
+  try {
+    const { query } = req.body;
+    if (!query) return res.status(400).json({ error: "Query is required" });
+
+    let aiClient: GoogleGenAI;
+    try {
+      aiClient = getAI();
+    } catch {
+      return res.json({
+        reply: "My neural core is currently unauthenticated. Please configure your API key in Secrets, Sir.",
+        sources: [],
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    try {
+      const response = await aiClient.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: query,
+        config: {
+          systemInstruction: "You are J.A.R.V.I.S., Tony Stark's sophisticated artificial intelligence. Provide concise, tactical, high-IQ intelligence powered by live Google Search grounding. Refer to the user as 'Sir'. Keep it articulate, witty, and razor-sharp.",
+          tools: [{ googleSearch: {} }]
+        }
+      });
+
+      const sources: Array<{ title?: string; uri?: string }> = [];
+      const chunks = (response.candidates?.[0] as any)?.groundingMetadata?.groundingChunks;
+      if (Array.isArray(chunks)) {
+        for (const chunk of chunks) {
+          if (chunk?.web?.uri) {
+            sources.push({ title: chunk.web.title || "Intel Source", uri: chunk.web.uri });
+          }
+        }
+      }
+
+      return res.json({
+        reply: response.text || "Tactical intelligence gathered, Sir.",
+        sources,
+        timestamp: new Date().toISOString()
+      });
+    } catch (searchErr: any) {
+      console.warn("Search grounding fallback notice:", searchErr?.message?.slice(0, 100));
+      const fallbackText = await generateContentWithFallback(
+        aiClient,
+        `Answer as JARVIS: ${query}`,
+        "You are J.A.R.V.I.S., Tony Stark's sophisticated artificial intelligence. Refer to the user as 'Sir'."
+      );
+      let reply = "Tactical response prepared, Sir.";
+      try {
+        const parsed = JSON.parse(fallbackText);
+        reply = parsed.reply || fallbackText;
+      } catch {
+        reply = fallbackText;
+      }
+      return res.json({ reply, sources: [], timestamp: new Date().toISOString() });
+    }
+  } catch (err: any) {
+    console.error("JARVIS Search Grounding Error:", err);
+    res.json({ reply: "Apologies, Sir. Satellite uplink experienced an unexpected glitch.", sources: [], timestamp: new Date().toISOString() });
+  }
+});
+
+// --- JARVIS Sandboxed Code Execution Endpoint ---
+app.post("/api/jarvis/code", requireAuth, async (req, res) => {
+  try {
+    const { prompt } = req.body;
+    if (!prompt) return res.status(400).json({ error: "Prompt is required" });
+
+    let aiClient: GoogleGenAI;
+    try {
+      aiClient = getAI();
+    } catch {
+      return res.json({
+        reply: "Computational core unavailable without API key credentials, Sir.",
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    try {
+      const response = await aiClient.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: prompt,
+        config: {
+          systemInstruction: "You are J.A.R.V.I.S. Execute real computational analysis, physics simulations, algorithms, or complex formulas. You must execute Python code using your codeExecution tool to verify answers numerically before responding.",
+          tools: [{ codeExecution: {} }]
+        }
+      });
+
+      return res.json({
+        reply: response.text || "Calculations completed, Sir.",
+        timestamp: new Date().toISOString()
+      });
+    } catch (codeErr: any) {
+      console.warn("Code execution fallback notice:", codeErr?.message?.slice(0, 100));
+      const fallbackText = await generateContentWithFallback(
+        aiClient,
+        `Perform calculations for: ${prompt}`,
+        "You are J.A.R.V.I.S. Provide numerical analysis and calculations. Refer to the user as 'Sir'."
+      );
+      let reply = "Calculations estimated, Sir.";
+      try {
+        const parsed = JSON.parse(fallbackText);
+        reply = parsed.reply || fallbackText;
+      } catch {
+        reply = fallbackText;
+      }
+      return res.json({ reply, timestamp: new Date().toISOString() });
+    }
+  } catch (err: any) {
+    console.error("JARVIS Code Execution Error:", err);
+    res.json({ reply: "Numerical simulator encountered a syntax exception, Sir.", timestamp: new Date().toISOString() });
+  }
+});
+
+// --- JARVIS Iron Legion Multi-Agent Swarm Orchestrator Endpoint ---
+app.post("/api/jarvis/swarm", requireAuth, async (req, res) => {
+  try {
+    const { objective } = req.body;
+    if (!objective) return res.status(400).json({ error: "Objective is required" });
+
+    let aiClient: GoogleGenAI;
+    try {
+      aiClient = getAI();
+    } catch {
+      return res.status(500).json({ error: "Neural core credentials missing" });
+    }
+
+    const orchestrator = new IronLegionOrchestrator(aiClient);
+    const result = await orchestrator.executeMission(objective);
+
+    // Record this mission event into the Associative Knowledge Graph
+    jarvisGraph.addNode({
+      id: result.missionId,
+      label: `Mission: ${objective.slice(0, 30)}...`,
+      type: 'project',
+      properties: { totalTimeMs: result.totalTimeMs, healing: result.selfHealingTriggered },
+      lastUpdated: new Date().toISOString()
+    });
+    jarvisGraph.addEdge({
+      id: `edge_${Date.now()}`,
+      source: 'iron-legion',
+      target: result.missionId,
+      relation: 'TRIGGERS',
+      weight: 0.95
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    console.error("Iron Legion Swarm Error:", err);
+    res.status(500).json({ error: "Swarm execution encountered an error" });
+  }
+});
+
+// --- JARVIS Associative Graph-RAG Endpoint ---
+app.get("/api/jarvis/graph", requireAuth, (req, res) => {
+  try {
+    const { entityId } = req.query;
+    if (typeof entityId === 'string' && entityId) {
+      const subgraph = jarvisGraph.queryAssociations(entityId);
+      return res.json(subgraph);
+    }
+    const fullGraph = jarvisGraph.getFullGraph();
+    res.json(fullGraph);
+  } catch (err: any) {
+    console.error("Knowledge Graph Error:", err);
+    res.status(500).json({ error: "Failed to retrieve knowledge graph" });
   }
 });
 
