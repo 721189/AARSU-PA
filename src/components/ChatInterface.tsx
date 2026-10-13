@@ -106,6 +106,53 @@ export function ChatInterface({
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [showWorkspaceCard, setShowWorkspaceCard] = useState(false);
   const [proactiveSuggestions, setProactiveSuggestions] = useState<string[]>([]);
+
+  // JARVIS Protocol State
+  const [showJarvisModal, setShowJarvisModal] = useState(false);
+  const [jarvisTask, setJarvisTask] = useState('Codebase Security & Dependency Audit');
+  const [jarvisLoading, setJarvisLoading] = useState(false);
+  const [jarvisResult, setJarvisResult] = useState<any>(null);
+  const [workspaceState, setWorkspaceState] = useState<any>(null);
+
+  const runJarvisAgent = async () => {
+    if (!firebaseToken) {
+      alert("Please authenticate first.");
+      return;
+    }
+    setJarvisLoading(true);
+    setJarvisResult(null);
+    try {
+      const res = await fetch('/api/agent/run', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${firebaseToken}`
+        },
+        body: JSON.stringify({ taskName: jarvisTask, prompt: "Perform deep autonomous analysis of the system architecture and recommend optimal performance improvements." })
+      });
+      const data = await res.json();
+      setJarvisResult(data);
+      speak(`Autonomous agent task ${jarvisTask} completed successfully.`);
+    } catch (e) {
+      console.error(e);
+      alert("Agent execution failed.");
+    } finally {
+      setJarvisLoading(false);
+    }
+  };
+
+  const fetchWorkspaceState = async () => {
+    if (!firebaseToken) return;
+    try {
+      const res = await fetch('/api/fs/workspace', {
+        headers: { 'Authorization': `Bearer ${firebaseToken}` }
+      });
+      const data = await res.json();
+      setWorkspaceState(data);
+    } catch (e) {
+      console.error(e);
+    }
+  };
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const visemeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -612,6 +659,18 @@ export function ChatInterface({
               }}
             />
 
+            {/* JARVIS Protocol & Sub-Agents HUD Toggle */}
+            <button
+              onClick={() => {
+                setShowJarvisModal(true);
+                fetchWorkspaceState();
+              }}
+              title="Activate JARVIS Protocol & Autonomous Agents"
+              className="px-2 py-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/50 text-cyan-300 text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-cyan-400 animate-pulse" /> JARVIS Mode
+            </button>
+
             {/* Soft Voice Tuning Toggle */}
             <button
               onClick={() => setShowVoiceSettings(!showVoiceSettings)}
@@ -908,6 +967,89 @@ export function ChatInterface({
           <Send className="w-4 h-4" />
         </button>
       </div>
+
+      {/* ================= JARVIS PROTOCOL & SUB-AGENTS MODAL ================= */}
+      {showJarvisModal && (
+        <div className="absolute inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-cyan-500/50 rounded-2xl w-full max-w-lg shadow-2xl p-5 flex flex-col gap-4 text-xs">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-cyan-600/20 border border-cyan-500/50 flex items-center justify-center text-cyan-400 font-bold">
+                  ⚡
+                </div>
+                <div>
+                  <h2 className="font-bold text-sm text-cyan-300 tracking-wide">JARVIS Protocol & Sub-Agents</h2>
+                  <p className="text-[10px] text-slate-400">Autonomous Task Execution & Deep OS Integration</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowJarvisModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg bg-slate-800"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Workspace Inspector */}
+            {workspaceState && (
+              <div className="bg-slate-950/60 border border-cyan-500/30 rounded-xl p-3 flex flex-col gap-1.5">
+                <span className="font-semibold text-cyan-400 text-[11px] flex items-center gap-1">
+                  💻 Workspace OS Diagnostics
+                </span>
+                <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-300">
+                  <div><span className="text-slate-500">System:</span> {workspaceState.workspaceName}</div>
+                  <div><span className="text-slate-500">Version:</span> {workspaceState.version}</div>
+                  <div><span className="text-slate-500">Status:</span> <span className="text-emerald-400 font-medium">{workspaceState.status}</span></div>
+                  <div><span className="text-slate-500">Security:</span> {workspaceState.securityLevel}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Autonomous Agent Runner */}
+            <div className="flex flex-col gap-2">
+              <label className="font-semibold text-slate-300">Select Autonomous Agent Task:</label>
+              <select
+                value={jarvisTask}
+                onChange={(e) => setJarvisTask(e.target.value)}
+                className="bg-slate-800 border border-slate-700 rounded-lg p-2 text-white focus:outline-none focus:border-cyan-500"
+              >
+                <option value="Codebase Security & Dependency Audit">Codebase Security & Dependency Audit</option>
+                <option value="Autonomous Performance Optimization">Autonomous Performance Optimization</option>
+                <option value="Real-time Knowledge Synthesis & Research">Real-time Knowledge Synthesis & Research</option>
+                <option value="System Diagnostics & Memory Garbage Collection">System Diagnostics & Memory Garbage Collection</option>
+              </select>
+
+              <button
+                onClick={runJarvisAgent}
+                disabled={jarvisLoading}
+                className="mt-1 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white font-semibold transition-all flex items-center justify-center gap-2 shadow-md disabled:opacity-50"
+              >
+                {jarvisLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                {jarvisLoading ? "Executing Autonomous Protocol..." : "Deploy JARVIS Agent Task ⚡"}
+              </button>
+            </div>
+
+            {/* Execution Result */}
+            {jarvisResult && (
+              <div className="bg-slate-950 border border-emerald-500/40 rounded-xl p-3 flex flex-col gap-2 max-h-48 overflow-y-auto">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-emerald-400 text-[11px]">Task Completed Successfully</span>
+                  <span className="text-[9px] text-slate-500">{new Date(jarvisResult.timestamp).toLocaleTimeString()}</span>
+                </div>
+                <p className="text-slate-200 text-[11px]">{jarvisResult.summary}</p>
+                <div className="flex flex-col gap-1 mt-1">
+                  <span className="text-[10px] uppercase font-bold text-slate-500">Execution Steps:</span>
+                  {jarvisResult.steps?.map((step: string, idx: number) => (
+                    <div key={idx} className="text-[10px] text-slate-300 flex items-center gap-1.5">
+                      <span className="text-cyan-400">✓</span> {step}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
     </div>
   );

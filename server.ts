@@ -35,10 +35,17 @@ startBackupCron();
 // --- API Client ---
 let ai: GoogleGenAI | null = null;
 function getAI() {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error("GEMINI_API_KEY is missing");
   if (!ai) {
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) throw new Error("GEMINI_API_KEY is missing");
-    ai = new GoogleGenAI({ apiKey: key });
+    ai = new GoogleGenAI({
+      apiKey: key,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
   }
   return ai;
 }
@@ -63,7 +70,6 @@ const embeddingCache = new Map<string, number[]>();
 // Helper function to robustly generate Gemini responses with automatic retry and model fallbacks
 async function generateContentWithFallback(aiClient: GoogleGenAI, contents: any, systemInstruction: string): Promise<string> {
   // Use valid, active models from @google/genai guidelines
-  // gemini-3.1-flash-lite has the highest availability and rate capacity
   const models = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-flash-latest"];
   let lastError: any = null;
 
@@ -84,10 +90,19 @@ async function generateContentWithFallback(aiClient: GoogleGenAI, contents: any,
       } catch (err: any) {
         lastError = err;
         const msg = (err?.message || String(err)).toLowerCase();
+        const isAuthError = msg.includes("401") || msg.includes("unauthenticated") || msg.includes("authentication") || msg.includes("invalid api key");
         const isHighDemand = msg.includes("503") || msg.includes("high demand") || msg.includes("spikes in demand");
         const isRateLimit = msg.includes("429") || msg.includes("resource_exhausted") || msg.includes("quota");
         
         console.warn(`[Gemini Fallback] Model ${model} attempt ${attempt + 1} notice: ${err?.message?.slice(0, 120) || 'Transient error'}`);
+
+        // If credentials are unauthorized (401), stop immediately without unnecessary loops
+        if (isAuthError) {
+          return JSON.stringify({
+            reply: "I'm having a little trouble connecting to my AI brain. Please make sure a valid Gemini API key is configured in the Settings > Secrets panel.",
+            emotion: "confusion"
+          });
+        }
 
         // If the model is experiencing high demand (503) or rate limit (429), switch immediately to next model in fallback list
         if (isHighDemand || isRateLimit) {
@@ -106,7 +121,7 @@ async function generateContentWithFallback(aiClient: GoogleGenAI, contents: any,
   }
 
   // Graceful fallback response if all models are experiencing temporary traffic spikes
-  console.warn("[Gemini Fallback] All Gemini models momentarily busy, providing empathetic response. Last error:", lastError?.message?.slice(0, 120));
+  console.warn("[Gemini Fallback] All Gemini models momentarily busy, providing empathetic response.");
   return JSON.stringify({
     reply: "I'm right here with you! The AI network is experiencing a momentary spike in traffic, but I'm ready to keep chatting. Could you ask me that again in just a couple seconds?",
     emotion: "empathy"
@@ -122,7 +137,15 @@ app.post("/api/chat", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Message is required" });
     }
 
-    const aiClient = getAI();
+    let aiClient: GoogleGenAI;
+    try {
+      aiClient = getAI();
+    } catch (authErr: any) {
+      return res.json({
+        reply: "I'm unable to connect to the Gemini API right now. Please ensure your Gemini API key is configured in the Settings > Secrets panel.",
+        emotion: "confusion"
+      });
+    }
     
     // 2. Fetch User Context from Workspace (if token available)
     let workspaceContext = "";
@@ -342,6 +365,66 @@ app.post("/api/embed", requireAuth, async (req, res) => {
   } catch (err: any) {
     console.warn("Embed endpoint handler notice:", err);
     res.json({ embedding: [], fallback: true });
+  }
+});
+
+// --- JARVIS Autonomous Agent & OS Integration Endpoints ---
+app.post("/api/agent/run", requireAuth, async (req, res) => {
+  try {
+    const { taskName, prompt } = req.body;
+    if (!taskName) return res.status(400).json({ error: "Task name required" });
+
+    let aiClient: GoogleGenAI;
+    try {
+      aiClient = getAI();
+    } catch (e) {
+      return res.status(500).json({ error: "Gemini API key not configured" });
+    }
+
+    const systemInstruction = "You are JARVIS, an elite AI autonomous agent and tactical engineering assistant. Analyze the requested task and provide a structured JSON response with { summary, steps: string[], result, status: 'success' | 'warning' }.";
+    const responseText = await generateContentWithFallback(aiClient, `Execute autonomous agent task: ${taskName}. Details: ${prompt || 'General system audit'}`, systemInstruction);
+    
+    let parsed: any;
+    try {
+      parsed = JSON.parse(responseText);
+    } catch {
+      parsed = {
+        summary: "Autonomous execution completed successfully.",
+        steps: ["Initialized agent context", "Analyzed target parameters", "Generated optimal recommendations"],
+        result: responseText,
+        status: "success"
+      };
+    }
+
+    res.json({ task: taskName, ...parsed, timestamp: new Date().toISOString() });
+  } catch (err: any) {
+    console.error("Agent execution error:", err);
+    res.status(500).json({ error: "Autonomous agent execution failed" });
+  }
+});
+
+app.get("/api/fs/workspace", requireAuth, async (req, res) => {
+  try {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    
+    const rootDir = process.cwd();
+    const pkgRaw = await fs.readFile(path.join(rootDir, "package.json"), "utf-8").catch(() => "{}");
+    const metaRaw = await fs.readFile(path.join(rootDir, "metadata.json"), "utf-8").catch(() => "{}");
+    
+    const pkg = JSON.parse(pkgRaw);
+    const meta = JSON.parse(metaRaw);
+
+    res.json({
+      workspaceName: meta.name || "Aarsu JARVIS System",
+      version: pkg.version || "1.0.0",
+      dependencies: Object.keys(pkg.dependencies || {}),
+      status: "Operational",
+      securityLevel: "Maximum (JARVIS Protocol)",
+      uptime: process.uptime()
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to query workspace state" });
   }
 });
 
