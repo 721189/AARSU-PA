@@ -31,6 +31,7 @@ import {
 import { Jarvis3DCore } from './Jarvis3DCore';
 import { JarvisHoloCad } from './JarvisHoloCad';
 import { JarvisMcpInspector } from './JarvisMcpInspector';
+import { JarvisSystemsDiagnostic } from './JarvisSystemsDiagnostic';
 import { jarvisAudio } from '../lib/audioEngine';
 import { duplexVoiceEngine } from '../lib/duplexVoice';
 import { authenticatedFetch, auth, isUserAuthenticated } from '../lib/firebase';
@@ -1030,78 +1031,9 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             </div>
           )}
 
-          {/* TAB: Enterprise Systems & Redis Telemetry */}
+          {/* TAB: Systems Diagnostic with D3.js */}
           {activeTab === 'systems' && (
-            <div className="flex flex-col gap-2.5">
-              <div className="grid grid-cols-2 gap-2">
-                <div className="bg-slate-950/80 border border-cyan-500/30 p-2.5 rounded-xl flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-cyan-300 text-[11px] flex items-center gap-1.5">
-                      <Database className="w-3.5 h-3.5 text-cyan-400" /> In-Memory Redis Engine
-                    </span>
-                    <button
-                      onClick={runRedisBenchmark}
-                      className="text-[9px] text-cyan-300 hover:text-white bg-cyan-950 px-1.5 py-0.5 rounded border border-cyan-800"
-                    >
-                      Benchmark
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-2 gap-1 text-[10px] text-slate-300">
-                    <div>Hit Ratio: <span className="text-emerald-400 font-semibold">{redisMetrics?.hitRatio || '99.4%'}</span></div>
-                    <div>Total Keys: <span className="text-cyan-300 font-semibold">{redisMetrics?.totalKeys || '14'}</span></div>
-                    <div>Hits: <span className="text-slate-300">{redisMetrics?.hits || '48'}</span></div>
-                    <div>Latency: <span className="text-emerald-400 font-mono font-semibold">{redisBenchMs !== null ? `${redisBenchMs}ms` : '< 1ms'}</span></div>
-                  </div>
-                </div>
-
-                <div className="bg-slate-950/80 border border-cyan-500/30 p-2.5 rounded-xl flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-emerald-400 text-[11px] flex items-center gap-1.5">
-                      <HeartPulse className="w-3.5 h-3.5 text-rose-400 animate-pulse" /> Wearable Biometrics
-                    </span>
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={simulateStressSpike}
-                        title="Simulate elevated stress level to test proactive alert triggers"
-                        className="text-[9px] text-rose-300 hover:text-white bg-rose-950/70 px-1.5 py-0.5 rounded border border-rose-800"
-                      >
-                        Stress Spike
-                      </button>
-                      <button
-                        onClick={normalizeVitals}
-                        title="Reset vitals to optimal resting baseline"
-                        className="text-[9px] text-emerald-300 hover:text-white bg-emerald-950/70 px-1.5 py-0.5 rounded border border-emerald-800"
-                      >
-                        Reset
-                      </button>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-1 text-[10px] text-slate-300">
-                    <div>Heart Rate: <span className="text-emerald-400 font-semibold">{biometrics.heartRate} BPM</span></div>
-                    <div>Stress Index: <span className="text-cyan-300 font-semibold">{biometrics.stressIndex}%</span></div>
-                    <div>Focus Level: <span className="text-cyan-300 font-semibold">{biometrics.focusLevel}%</span></div>
-                    <div>Core Temp: <span className="text-slate-300">{biometrics.coreTempC}°C</span></div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Proactive Daemon Feed */}
-              <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-2.5 flex flex-col gap-1.5 max-h-36 overflow-y-auto">
-                <span className="font-bold text-slate-400 text-[10px] uppercase tracking-wider flex items-center gap-1">
-                  <BellRing className="w-3 h-3 text-cyan-400" /> Proactive Daemon Intelligence Log
-                </span>
-                {proactiveAlerts.length > 0 ? (
-                  proactiveAlerts.map(alert => (
-                    <div key={alert.id} className="text-[10px] text-slate-300 border-l-2 border-cyan-400 pl-2 py-0.5">
-                      <div className="font-medium text-cyan-300">{alert.message}</div>
-                      <div className="text-[9px] text-slate-400 italic">Action: {alert.actionRecommendation}</div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="text-[10px] text-slate-500">Autonomous daemon monitoring system and vitals...</div>
-                )}
-              </div>
-            </div>
+            <JarvisSystemsDiagnostic />
           )}
 
           {/* TAB: Host OS Kernel Diagnostics */}
