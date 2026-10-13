@@ -1,153 +1,124 @@
-# 🌟 Aarsu: Enterprise Cognitive Agent & J.A.R.V.I.S. Command Core
+# AARSU-PA
 
-[![AI Studio Build](https://img.shields.io/badge/Engine-Google%20Gemini%203.5%20%2F%203.8-blueviolet?style=for-the-badge&logo=google)](https://aistudio.google.com)
-[![Architecture](https://img.shields.io/badge/Architecture-MCP%20Hub%20%2B%20Reinforcement%20Learning-blue?style=for-the-badge)](https://modelcontextprotocol.io)
-[![Security](https://img.shields.io/badge/Security-Firebase%20Auth%20%2B%20OAuth%202.0-green?style=for-the-badge&logo=firebase)](https://firebase.google.com)
-[![Build Status](https://img.shields.io/badge/Build-Passing%20(Vite%20%2B%20TypeScript)-success?style=for-the-badge)](https://vitejs.dev)
+AARSU-PA is a TypeScript full-stack assistant application with a JARVIS-inspired interface.
+It combines a React + Vite frontend with an Express backend, Gemini integrations, Firebase auth, Google Workspace utilities, and simulation-friendly system modules.
 
----
+## Current Project Status
 
-## 🧭 Executive Summary
+This repository is an active modernization target. Some subsystems are intentionally simulated/in-memory for safe development and demo usage.
 
-**Aarsu** is an enterprise-grade, highly autonomous cognitive operating system and J.A.R.V.I.S. command core designed to synchronize human intent with multi-agent orchestration, proactive task scheduling, Model Context Protocol (MCP) integrations, reinforcement learning feedback loops, and hands-free voice execution. 
+### Simulation mode
 
-Built with **Google Gemini 3.5 / 3.8 Flash** and **Imagen 3.0**, Aarsu delivers real-time spatial computing, biometric HUD overlays, secure Firebase authentication, Google Workspace sync, and an immutable knowledge graph.
+`SIMULATION_MODE=true` by default.
 
----
+When simulation mode is enabled, the following are simulated/in-memory unless replaced with real adapters:
+- IoT bridge/device state
+- Biometric telemetry
+- Knowledge graph state
+- Redis-like cache
 
-## 📊 System Architecture & Data Flow
+The workspace endpoint (`/api/fs/workspace`) exposes `simulationMode` and `simulatedServices` so runtime status is explicit.
 
-```mermaid
-graph TD
-    subgraph Client Tier [Spatial UI & Voice Engine]
-        UI[React + Tailwind HUD] --> Hotkey[Global Hotkey Engine (Ctrl+Space)]
-        Hotkey --> STT[Continuous Web Speech STT]
-        STT --> Audio[Jarvis Audio Synthesizer]
-    end
+## Tech stack
 
-    subgraph Gateway Tier [Express Enterprise Gateway]
-        Gateway[Express Server.ts] --> Auth[Firebase Token & OAuth Verifier]
-        Gateway --> Rate[Rate Limiter & Helmet Security]
-    end
+- **Frontend:** React 19, TypeScript, Vite, Tailwind
+- **Backend:** Node.js, Express, TypeScript
+- **AI:** `@google/genai` (Gemini + image generation)
+- **Auth/Data:** Firebase client + Firebase Admin, Firestore
+- **Security:** Helmet, CORS, Express rate limiting
 
-    subgraph Intelligence Core [Google GenAI SDK]
-        Auth --> Gemini[Gemini 3.5 / 3.8 Flash]
-        Auth --> Imagen[Imagen 3.0 Visual Synthesizer]
-        Gemini --> MCP[MCP Hub (GitHub, Slack, Filesystem)]
-        Gemini --> RL[Reinforcement Learning Feedback Loop]
-    end
+## Repository structure
 
-    subgraph Persistence & Sync Tier
-        Gemini --> DB[(PostgreSQL / Cloud SQL + Firestore)]
-        Gemini --> Graph[Knowledge Graph & Redis Cache]
-        Gemini --> Daemon[Proactive Calendar & Email Daemon]
-    end
+```text
+server.ts                  Main server composition and route mounting
+src/server/config.ts       Typed runtime configuration
+src/server/routes/         Extracted backend route modules (modularization in progress)
+src/lib/                   Client-side logic modules (voice, memory, graph, etc.)
+src/components/            UI components and HUD modules
 ```
 
----
+## Getting started
 
-## 📈 Infographic: Core Capabilities Matrix
+### 1) Install dependencies
 
-```
-+-------------------------------------------------------------------------------------------------+
-|                                 AARSU COGNITIVE ENGINE V3.0                                     |
-+---------------------------------+-------------------------------+-------------------------------+
-| 🎙️ Hands-Free Voice Control     | 🧠 Reinforcement Learning     | 🔌 Modular MCP Hub            |
-| • Global Hotkey (Ctrl + Space)  | • Policy Reward Optimization  | • GitHub, Slack, Filesystem   |
-| • Always-on STT & Wake Word     | • User Feedback Reward Tuning | • Enterprise Connection Mgr   |
-| • Jarvis Arc Pulse Audio FX     | • Automated Agent Adaptation  | • Secure Sandbox Isolation    |
-+---------------------------------+-------------------------------+-------------------------------+
-| 📅 Proactive Daemon             | 🛡️ Enterprise Security       | 🖼️ Real-Time 3D Vision        |
-| • Calendar & Email Parsing      | • Firebase Auth + ID Tokens   | • Imagen 3.0 Photo Generation |
-| • Pre-Meeting Brief Generator   | • RBAC & Encrypted Vault      | • Spatial HUD Holographic UI  |
-| • Autonomous Task Scheduling    | • OAuth 2.0 Google Workspace  | • Multi-Modal Embeddings      |
-+---------------------------------+-------------------------------+-------------------------------+
+```bash
+npm install
 ```
 
----
+### 2) Configure environment
 
-## 📋 Feature Comparison Table
+Create a `.env` file in the repository root using `.env.example`:
 
-| Feature Capability | Traditional Assistants | Aarsu Cognitive Core (J.A.R.V.I.S.) |
-| :--- | :--- | :--- |
-| **Trigger Mechanism** | Manual mouse click / button tap | Global Hotkey (`Ctrl + Space`) & Wake Word detection |
-| **Model Backend** | Static prompts, single-turn | Multi-model Gemini 3.5/3.8 Flash with automatic fallback |
-| **Context Integration** | Isolated local history | Immutable Knowledge Graph & Redis Caching |
-| **Proactive Intelligence** | Reactive query-response | Autonomous daemon scanning calendar & emails for prep |
-| **External Integrations** | Hardcoded API keys | Model Context Protocol (MCP) modular bridge |
-| **Voice Feedback** | Standard browser speech | Spatial arc pulse audio & emotional viseme synchronization |
-| **Security & Auth** | Basic session cookies | Firebase ID tokens + Google Workspace OAuth 2.0 |
+```env
+GEMINI_API_KEY=your_gemini_api_key
+PORT=3000
+NODE_ENV=development
+SIMULATION_MODE=true
+ENABLE_VOICE=true
+ENABLE_WORKSPACE=true
+APP_URL=http://localhost:3000
+VITE_OAUTH_CLIENT_ID=your_google_oauth_client_id
+```
 
----
+### 3) Run locally
 
-## 🛠️ Technical Stack
+```bash
+npm run dev
+```
 
-- **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Lucide Icons, Canvas 3D Particle HUD.
-- **Backend**: Node.js, Express, TypeScript, `@google/genai` (Gemini 3.5/3.8 Flash, Imagen 3.0).
-- **Security**: Helmet, Express Rate Limit, Firebase Authentication, OAuth 2.0 Bearer tokens.
-- **Intelligence**: Reinforcement learning feedback loop, MCP connector daemons, Knowledge Graph vector embeddings.
+### 4) Production build
 
----
+```bash
+npm run build
+npm start
+```
 
-## 🔌 Model Context Protocol (MCP) Hub
+## Available scripts
 
-Aarsu implements a robust MCP architecture allowing seamless connection to external developer tools and data silos:
+- `npm run dev` — run backend + Vite dev pipeline via `tsx server.ts`
+- `npm run lint` — TypeScript type-check (`tsc --noEmit`)
+- `npm run build` — build frontend and bundle server
+- `npm start` — run bundled server from `dist/server.cjs`
 
-1. **GitHub MCP**: Autonomous repository inspection, issue tracking, and PR summarization.
-2. **Slack MCP**: Real-time channel message parsing, triage, and automated replies.
-3. **Local Filesystem MCP**: Secure directory indexing, code search, and file manipulation.
+## Key API groups
 
----
+- `/api/chat` — primary chat endpoint
+- `/api/fs/*` — workspace/system metadata endpoints
+- `/api/mcp/*` — MCP-style tools/resources endpoints
+- `/api/jarvis/*` — assistant-specific feature endpoints (vision, search, IoT, diagnostics, etc.)
 
-## 🚀 Quick Start & Installation
+## Free deployment options
 
-1. **Clone and Install Dependencies**:
-   ```bash
-   git clone https://github.com/aarsu/aarsu-cognitive-core.git
-   cd aarsu-cognitive-core
-   npm install
-   ```
+Because this app includes both frontend and backend, prefer a platform that supports Node.js services.
 
-2. **Configure Environment Variables**:
-   Create a `.env` file in the root directory:
-   ```env
-   GEMINI_API_KEY=your_google_genai_api_key_here
-   PORT=3000
-   NODE_ENV=development
-   SIMULATION_MODE=true
-   ENABLE_VOICE=true
-   ENABLE_WORKSPACE=true
-   ```
+### Option A (recommended): Render free tier
 
-### Simulation Mode
+1. Push this repo to GitHub.
+2. Create a new **Web Service** on Render from this repo.
+3. Set:
+   - **Build Command:** `npm install && npm run build`
+   - **Start Command:** `npm start`
+4. Add environment variables from `.env.example` (especially `GEMINI_API_KEY`).
+5. Deploy.
 
-`SIMULATION_MODE` is enabled by default. In this mode, IoT controls, biometric telemetry, the knowledge graph, and Redis-like cache are simulated/in-memory unless replaced with real adapters/services.
+### Option B: Railway / Fly.io free credits
 
-3. **Run Development Server**:
-   ```bash
-   npm run dev
-   ```
+Use the same build/start commands:
+- Build: `npm install && npm run build`
+- Start: `npm start`
 
-4. **Production Build**:
-   ```bash
-   npm run build
-   npm start
-   ```
+### Option C: split deployment
 
----
+- Frontend on Vercel/Netlify (free plans)
+- Backend on Render/Railway/Fly
 
-## 📜 API Endpoints Reference
+## Deployment notes
 
-| Endpoint | Method | Description |
-| :--- | :--- | :--- |
-| `/api/health` | `GET` | System health check and uptime monitor |
-| `/api/chat` | `POST` | Primary cognitive generation with Gemini 3.5/3.8 flash |
-| `/api/image/generate` | `POST` | High-fidelity 3D realistic image generation via Imagen 3.0 |
-| `/api/mcp/connect` | `POST` | Establish MCP bridge to GitHub, Slack, or Filesystem |
-| `/api/reinforcement/reward` | `POST` | Submit reward feedback for reinforcement learning loop |
+- Do not expose secrets to the client.
+- `GEMINI_API_KEY` must be set in server environment variables.
+- Keep `SIMULATION_MODE=true` unless real infrastructure is wired.
+- For production, set `NODE_ENV=production`.
 
----
+## License
 
-## 📄 License
-
-Licensed under the MIT License. Built with ❤️ for enterprise cognitive excellence.
+This project is provided under the repository's license terms.
