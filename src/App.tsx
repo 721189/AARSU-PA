@@ -35,8 +35,8 @@ export default function App() {
 
   useEffect(() => {
     const unsubscribe = initAuth(
-      (user) => {
-        user.getIdToken().then(setFirebaseToken);
+      (_user, token) => {
+        setFirebaseToken(token);
       },
       () => {
         setFirebaseToken(null);

@@ -41,8 +41,12 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
     req.userRole = 'user';
     
     next();
-  } catch (error) {
-    console.error('Auth error:', error);
+  } catch (error: any) {
+    const isExpired = error?.code === 'auth/id-token-expired' || String(error?.message || error).includes('id-token-expired');
+    if (isExpired) {
+      return res.status(401).json({ error: 'Token expired', code: 'auth/id-token-expired' });
+    }
+    console.warn('Auth token verification notice:', error?.message || error);
     res.status(401).json({ error: 'Unauthorized: Invalid token' });
   }
 };

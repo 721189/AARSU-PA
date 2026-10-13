@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Network, Play, FileText, CheckCircle2, AlertCircle, Loader2, ArrowRight } from 'lucide-react';
 import { jarvisAudio } from '../lib/audioEngine';
+import { authenticatedFetch } from '../lib/firebase';
 
 interface JarvisMcpInspectorProps {
   token: string | null;
@@ -22,8 +23,8 @@ export function JarvisMcpInspector({ token }: JarvisMcpInspectorProps) {
     const fetchMcpMeta = async () => {
       try {
         const [toolsRes, resRes] = await Promise.all([
-          fetch('/api/mcp/tools', { headers: { 'Authorization': `Bearer ${token}` } }),
-          fetch('/api/mcp/resources', { headers: { 'Authorization': `Bearer ${token}` } })
+          authenticatedFetch('/api/mcp/tools'),
+          authenticatedFetch('/api/mcp/resources')
         ]);
         if (toolsRes.ok) {
           const t = await toolsRes.json();
@@ -73,16 +74,15 @@ export function JarvisMcpInspector({ token }: JarvisMcpInspectorProps) {
       try {
         parsed = JSON.parse(toolArgs);
       } catch {
-        alert("Invalid JSON format in tool arguments");
+        setExecutionResult({ error: "Invalid JSON format in tool arguments" });
         setLoading(false);
         return;
       }
 
-      const res = await fetch('/api/mcp/tools/call', {
+      const res = await authenticatedFetch('/api/mcp/tools/call', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ name: selectedTool, arguments: parsed })
       });
@@ -103,11 +103,10 @@ export function JarvisMcpInspector({ token }: JarvisMcpInspectorProps) {
     setResourceContent(null);
 
     try {
-      const res = await fetch('/api/mcp/resources/read', {
+      const res = await authenticatedFetch('/api/mcp/resources/read', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ uri })
       });

@@ -1,5 +1,11 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, User } from 'firebase/auth';
+import { 
+  getAuth, 
+  GoogleAuthProvider, 
+  signInWithPopup, 
+  onIdTokenChanged, 
+  User 
+} from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -9,17 +15,15 @@ export const db = getFirestore(app, (firebaseConfig as any).firestoreDatabaseId 
 
 const provider = new GoogleAuthProvider();
 
-// Flag to indicate if we are in the middle of a sign-in flow.
 let isSigningIn = false;
-// Cache the access token in memory.
 let cachedAccessToken: string | null = null;
 
-// Initialize auth state listener. Call this on app load.
+// Initialize auth state listener. Uses onIdTokenChanged to automatically refresh tokens before expiry.
 export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
   onAuthFailure?: () => void
 ) => {
-  return onAuthStateChanged(auth, async (user: User | null) => {
+  return onIdTokenChanged(auth, async (user: User | null) => {
     if (user) {
       try {
         const idToken = await user.getIdToken();
@@ -33,6 +37,54 @@ export const initAuth = (
       if (onAuthFailure) onAuthFailure();
     }
   });
+};
+
+// Check if user is actively authenticated
+export const isUserAuthenticated = (): boolean => {
+  return Boolean(auth.currentUser);
+};
+
+// Retrieve a fresh, non-expired ID token
+export const getFreshIdToken = async (forceRefresh: boolean = false): Promise<string | null> => {
+  try {
+    if (!auth.currentUser && typeof auth.authStateReady === 'function') {
+      await auth.authStateReady();
+    }
+    const user = auth.currentUser;
+    if (!user) return null;
+    return await user.getIdToken(forceRefresh);
+  } catch (err: any) {
+    console.warn("Notice: retrieving fresh ID token:", err?.message || err);
+    return null;
+  }
+};
+
+// Enterprise authenticated fetch with automatic 401 token refresh retry loop
+export const authenticatedFetch = async (url: string, init: RequestInit = {}): Promise<Response> => {
+  let token = await getFreshIdToken(false);
+
+  const headers = new Headers(init.headers || {});
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  let response = await fetch(url, { ...init, headers });
+
+  // If token expired (401), force-refresh and retry request once with brand new ID token
+  if (response.status === 401) {
+    try {
+      const freshToken = await getFreshIdToken(true);
+      if (freshToken) {
+        const retryHeaders = new Headers(init.headers || {});
+        retryHeaders.set('Authorization', `Bearer ${freshToken}`);
+        response = await fetch(url, { ...init, headers: retryHeaders });
+      }
+    } catch (refreshErr) {
+      console.warn("Token refresh retry notice:", refreshErr);
+    }
+  }
+
+  return response;
 };
 
 export const signInWithGoogle = async (): Promise<{ user: User; accessToken: string } | null> => {

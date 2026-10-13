@@ -22,7 +22,7 @@ import {
   Check
 } from 'lucide-react';
 import { ChatMessage, Emotion, SpeechViseme } from '../types';
-import { signInWithGoogle, initAuth, auth } from '../lib/firebase';
+import { signInWithGoogle, initAuth, auth, authenticatedFetch, getFreshIdToken } from '../lib/firebase';
 import { saveToMemory, retrieveContext } from '../lib/memory';
 import { VisionManager, VisionManagerHandle } from './VisionManager';
 
@@ -115,18 +115,17 @@ export function ChatInterface({
   const [workspaceState, setWorkspaceState] = useState<any>(null);
 
   const runJarvisAgent = async () => {
-    if (!firebaseToken) {
-      alert("Please authenticate first.");
+    if (!firebaseToken && !auth.currentUser) {
+      speak("Please authenticate first to launch autonomous JARVIS agent tasks.");
       return;
     }
     setJarvisLoading(true);
     setJarvisResult(null);
     try {
-      const res = await fetch('/api/agent/run', {
+      const res = await authenticatedFetch('/api/agent/run', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${firebaseToken}`
         },
         body: JSON.stringify({ taskName: jarvisTask, prompt: "Perform deep autonomous analysis of the system architecture and recommend optimal performance improvements." })
       });
@@ -135,18 +134,15 @@ export function ChatInterface({
       speak(`Autonomous agent task ${jarvisTask} completed successfully.`);
     } catch (e) {
       console.error(e);
-      alert("Agent execution failed.");
+      speak("Autonomous agent execution encountered an error.");
     } finally {
       setJarvisLoading(false);
     }
   };
 
   const fetchWorkspaceState = async () => {
-    if (!firebaseToken) return;
     try {
-      const res = await fetch('/api/fs/workspace', {
-        headers: { 'Authorization': `Bearer ${firebaseToken}` }
-      });
+      const res = await authenticatedFetch('/api/fs/workspace');
       const data = await res.json();
       setWorkspaceState(data);
     } catch (e) {
@@ -173,8 +169,8 @@ export function ChatInterface({
   // Monitor Firebase Auth State
   useEffect(() => {
     const unsubscribe = initAuth(
-      (user, token) => {
-        user.getIdToken().then(setFirebaseToken);
+      (_user, token) => {
+        setFirebaseToken(token);
       },
       () => {
         setFirebaseToken(null);
@@ -239,13 +235,12 @@ export function ChatInterface({
     }
   };
 
-  const fetchProactiveSuggestions = async (wsToken: string, fbToken: string) => {
+  const fetchProactiveSuggestions = async (wsToken: string, _fbToken?: string) => {
     try {
-      const res = await fetch('/api/proactive', {
+      const res = await authenticatedFetch('/api/proactive', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${fbToken}`
         },
         body: JSON.stringify({ token: wsToken }),
       });
@@ -599,7 +594,7 @@ export function ChatInterface({
 
       recognition.start();
     } else {
-      alert("Speech recognition is not supported in this browser.");
+      speak("Speech recognition is not supported in this browser.");
     }
   };
 

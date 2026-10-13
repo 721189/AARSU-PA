@@ -31,6 +31,7 @@ import { JarvisHoloCad } from './JarvisHoloCad';
 import { JarvisMcpInspector } from './JarvisMcpInspector';
 import { jarvisAudio } from '../lib/audioEngine';
 import { duplexVoiceEngine } from '../lib/duplexVoice';
+import { authenticatedFetch, auth, isUserAuthenticated } from '../lib/firebase';
 
 interface JarvisHudProps {
   token: string | null;
@@ -90,16 +91,18 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
     return () => clearInterval(interval);
   }, []);
 
+  const hasAuth = () => Boolean(token || isUserAuthenticated());
+
   // Poll Proactive alerts & Redis metrics when authenticated
   useEffect(() => {
-    if (!token) return;
+    if (!hasAuth()) return;
 
     const pollData = async () => {
       try {
         const [feedRes, redisRes, iotRes] = await Promise.all([
-          fetch('/api/jarvis/proactive/feed', { headers: { 'Authorization': `Bearer ${token}` } }),
-          fetch('/api/jarvis/redis/metrics', { headers: { 'Authorization': `Bearer ${token}` } }),
-          fetch('/api/jarvis/iot/devices', { headers: { 'Authorization': `Bearer ${token}` } })
+          authenticatedFetch('/api/jarvis/proactive/feed'),
+          authenticatedFetch('/api/jarvis/redis/metrics'),
+          authenticatedFetch('/api/jarvis/iot/devices')
         ]);
         if (feedRes.ok) {
           const feed = await feedRes.json();
@@ -148,7 +151,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
         jarvisAudio.playArcPulse();
         onVocalize?.("Full duplex voice monitoring engaged with active barge-in detection, Sir.");
       } else {
-        alert("Please enable microphone permissions in your browser to activate full-duplex voice.");
+        onVocalize?.("Microphone permission required for duplex voice audio, Sir.");
       }
     }
   };
@@ -164,8 +167,9 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
   };
 
   const runGoogleSearch = async () => {
-    if (!token) {
-      alert("Please authenticate to access Google Search Grounding.");
+    if (!hasAuth()) {
+      setResult({ text: "Authentication required to query Google Grounding intelligence, Sir. Please connect via Google." });
+      onVocalize?.("Please sign in to establish real-time intelligence uplinks, Sir.");
       return;
     }
     if (!searchQuery.trim()) return;
@@ -174,11 +178,10 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
     setLoading(true);
     setResult(null);
     try {
-      const res = await fetch('/api/jarvis/search', {
+      const res = await authenticatedFetch('/api/jarvis/search', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ query: searchQuery })
       });
@@ -197,8 +200,9 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
   };
 
   const runCodeExecution = async () => {
-    if (!token) {
-      alert("Please authenticate to access Gemini Code Execution.");
+    if (!hasAuth()) {
+      setResult({ text: "Authentication required to access Gemini computational sandboxes, Sir. Please connect via Google." });
+      onVocalize?.("Authentication credentials required for sandboxed computational physics, Sir.");
       return;
     }
     if (!computePrompt.trim()) return;
@@ -207,11 +211,10 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
     setLoading(true);
     setResult(null);
     try {
-      const res = await fetch('/api/jarvis/code', {
+      const res = await authenticatedFetch('/api/jarvis/code', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ prompt: computePrompt })
       });
@@ -230,19 +233,19 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
   };
 
   const runIronLegionSwarm = async () => {
-    if (!token) {
-      alert("Please authenticate to dispatch Iron Legion.");
+    if (!hasAuth()) {
+      setSwarmResult({ error: "Authentication required to dispatch Iron Legion sub-agents, Sir. Please sign in via Google." });
+      onVocalize?.("Iron Legion deployment requires authenticated clearance, Sir.");
       return;
     }
     jarvisAudio.playArcPulse();
     setLoading(true);
     setSwarmResult(null);
     try {
-      const res = await fetch('/api/jarvis/swarm', {
+      const res = await authenticatedFetch('/api/jarvis/swarm', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ objective: swarmObjective })
       });
@@ -254,19 +257,17 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
       }
     } catch (e) {
       console.error(e);
-      alert("Iron Legion dispatch failed.");
+      setSwarmResult({ error: "Iron Legion dispatch encounter an uplink failure, Sir." });
     } finally {
       setLoading(false);
     }
   };
 
   const fetchKnowledgeVault = async () => {
-    if (!token) return;
+    if (!hasAuth()) return;
     jarvisAudio.playTacticalChirp(800, 90);
     try {
-      const res = await fetch('/api/jarvis/graph', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
+      const res = await authenticatedFetch('/api/jarvis/graph');
       const data = await res.json();
       setGraphData(data);
     } catch (e) {
@@ -275,12 +276,10 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
   };
 
   const fetchHostDiagnostics = async () => {
-    if (!token) return;
+    if (!hasAuth()) return;
     jarvisAudio.playTacticalChirp(850, 90);
     try {
-      const res = await fetch('/api/jarvis/host/diagnostics', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
+      const res = await authenticatedFetch('/api/jarvis/host/diagnostics');
       const data = await res.json();
       setHostDiagnostics(data);
     } catch (e) {
@@ -289,14 +288,13 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
   };
 
   const triggerIotProtocol = async (protocolName: 'tactical_lockdown' | 'night_ambient' | 'nominal_work') => {
-    if (!token) return;
+    if (!hasAuth()) return;
     jarvisAudio.playArcPulse();
     try {
-      const res = await fetch('/api/jarvis/iot/protocol', {
+      const res = await authenticatedFetch('/api/jarvis/iot/protocol', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ protocol: protocolName })
       });
@@ -309,8 +307,9 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
   };
 
   const runVisionAnalysis = async () => {
-    if (!token) {
-      alert("Please authenticate to perform visual analysis.");
+    if (!hasAuth()) {
+      setVisionSitrep("Visual neural telemetry requires authentication, Sir. Please connect with Google.");
+      onVocalize?.("Visual sensors require authenticated telemetry access, Sir.");
       return;
     }
     jarvisAudio.playTacticalChirp(1100, 100);
@@ -334,11 +333,10 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
       }
       const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
 
-      const res = await fetch('/api/jarvis/vision/analyze', {
+      const res = await authenticatedFetch('/api/jarvis/vision/analyze', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ 
           imageBase64: dataUrl,

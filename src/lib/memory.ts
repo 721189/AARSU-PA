@@ -1,4 +1,4 @@
-import { db, auth } from './firebase';
+import { db, auth, authenticatedFetch } from './firebase';
 import { collection, addDoc, serverTimestamp, query, orderBy, limit, getDocs } from 'firebase/firestore';
 
 // Helper: Cosine similarity between two vectors
@@ -16,17 +16,16 @@ function cosineSimilarity(A: number[], B: number[]) {
 }
 
 // Generate embedding using the backend proxy with timeout & graceful fallback
-export async function getEmbedding(text: string, token: string): Promise<number[]> {
-  if (!text || !token) return [];
+export async function getEmbedding(text: string, _token?: string): Promise<number[]> {
+  if (!text) return [];
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 2500);
 
-    const res = await fetch('/api/embed', {
+    const res = await authenticatedFetch('/api/embed', {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify({ text }),
       signal: controller.signal
