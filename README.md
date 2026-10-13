@@ -113,7 +113,15 @@ Aarsu implements a robust MCP architecture allowing seamless connection to exter
    ```env
    GEMINI_API_KEY=your_google_genai_api_key_here
    PORT=3000
+   NODE_ENV=development
+   SIMULATION_MODE=true
+   ENABLE_VOICE=true
+   ENABLE_WORKSPACE=true
    ```
+
+### Simulation Mode
+
+`SIMULATION_MODE` is enabled by default. In this mode, IoT controls, biometric telemetry, the knowledge graph, and Redis-like cache are simulated/in-memory unless replaced with real adapters/services.
 
 3. **Run Development Server**:
    ```bash

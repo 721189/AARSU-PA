@@ -16,11 +16,11 @@ import { predictiveDaemon } from "./src/server/predictiveDaemon";
 import { iotBridge } from "./src/server/iotBridge";
 import { mcpServer } from "./src/server/mcpServer";
 import { reinforcementScheduler } from "./src/server/reinforcementScheduler";
+import { config } from "./src/server/config";
 
 // --- Enterprise Security Setup ---
 const app = express();
 app.set('trust proxy', 1);
-const PORT = 3000;
 
 // Security Middleware
 app.use(helmet({
@@ -43,7 +43,7 @@ startBackupCron();
 // --- API Client ---
 let ai: GoogleGenAI | null = null;
 function getAI() {
-  const key = process.env.GEMINI_API_KEY;
+  const key = config.geminiApiKey;
   if (!key) throw new Error("GEMINI_API_KEY is missing");
   if (!ai) {
     ai = new GoogleGenAI({
@@ -436,7 +436,16 @@ app.get("/api/fs/workspace", requireAuth, async (req, res) => {
       dependencies: Object.keys(pkg.dependencies || {}),
       status: "Operational",
       securityLevel: "Maximum (JARVIS Protocol)",
-      uptime: process.uptime()
+      uptime: process.uptime(),
+      simulationMode: config.simulationMode,
+      simulatedServices: config.simulationMode
+        ? [
+            "IoT bridge (simulated devices)",
+            "Biometric telemetry (simulated/in-memory)",
+            "Knowledge graph (in-memory)",
+            "Redis-like cache (in-memory)",
+          ]
+        : []
     });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to query workspace state" });
@@ -896,7 +905,7 @@ async function startServer() {
   } catch {}
   predictiveDaemon.start();
 
-  if (process.env.NODE_ENV !== "production") {
+  if (config.nodeEnv !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true, hmr: false },
       appType: "spa",
@@ -910,8 +919,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Enterprise Aarsu server running on http://0.0.0.0:${PORT}`);
+  app.listen(config.port, "0.0.0.0", () => {
+    console.log(`Enterprise Aarsu server running on http://0.0.0.0:${config.port}`);
   });
 }
 
