@@ -13,6 +13,8 @@ import { jarvisGraph } from "./src/lib/knowledgeGraph";
 import { redisCache } from "./src/server/redisCache";
 import { dbService } from "./src/server/dbService";
 import { predictiveDaemon } from "./src/server/predictiveDaemon";
+import { iotBridge } from "./src/server/iotBridge";
+import { mcpServer } from "./src/server/mcpServer";
 
 // --- Enterprise Security Setup ---
 const app = express();
@@ -677,11 +679,93 @@ app.post("/api/jarvis/vision/analyze", requireAuth, async (req, res) => {
   }
 });
 
+// --- Smart Facility & IoT Hardware Bridge Endpoints ---
+app.get("/api/jarvis/iot/devices", requireAuth, (req, res) => {
+  res.json({ devices: iotBridge.getAllDevices() });
+});
+
+app.post("/api/jarvis/iot/control", requireAuth, (req, res) => {
+  const { deviceId, state } = req.body;
+  if (!deviceId || !state) return res.status(400).json({ error: "deviceId and state required" });
+
+  try {
+    const updated = iotBridge.updateDeviceState(deviceId, state);
+    res.json({ status: "success", device: updated });
+  } catch (err: any) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+app.post("/api/jarvis/iot/protocol", requireAuth, (req, res) => {
+  const { protocol } = req.body;
+  const result = iotBridge.executeFacilityProtocol(protocol || 'nominal_work');
+  res.json({ status: "protocol_engaged", message: result, devices: iotBridge.getAllDevices() });
+});
+
+// --- Host OS Kernel & Deep Process Diagnostics Endpoint ---
+app.get("/api/jarvis/host/diagnostics", requireAuth, async (req, res) => {
+  const os = await import('os');
+  const memoryUsage = process.memoryUsage();
+  
+  res.json({
+    platform: os.platform(),
+    arch: os.arch(),
+    release: os.release(),
+    hostname: os.hostname(),
+    uptimeSeconds: Math.floor(os.uptime()),
+    processUptimeSeconds: Math.floor(process.uptime()),
+    cpus: os.cpus().length,
+    cpuModel: os.cpus()[0]?.model || 'Stark Core Thread',
+    totalMemoryMb: Math.round(os.totalmem() / 1024 / 1024),
+    freeMemoryMb: Math.round(os.freemem() / 1024 / 1024),
+    processHeapUsedMb: Math.round(memoryUsage.heapUsed / 1024 / 1024),
+    processRssMb: Math.round(memoryUsage.rss / 1024 / 1024),
+    loadAverage: os.loadavg(),
+    nodeVersion: process.version,
+    securityKernel: "Enforced (JARVIS Root Guardian)"
+  });
+});
+
+// --- Model Context Protocol (MCP) Endpoints ---
+app.get("/api/mcp/tools", requireAuth, (req, res) => {
+  res.json({ tools: mcpServer.listTools() });
+});
+
+app.post("/api/mcp/tools/call", requireAuth, async (req, res) => {
+  const { name, arguments: toolArgs } = req.body;
+  if (!name) return res.status(400).json({ error: "Tool name required" });
+
+  try {
+    const aiClient = getAI();
+    mcpServer.setAIClient(aiClient);
+  } catch {}
+
+  const result = await mcpServer.callTool(name, toolArgs || {});
+  res.json(result);
+});
+
+app.get("/api/mcp/resources", requireAuth, (req, res) => {
+  res.json({ resources: mcpServer.listResources() });
+});
+
+app.post("/api/mcp/resources/read", requireAuth, (req, res) => {
+  const { uri } = req.body;
+  if (!uri) return res.status(400).json({ error: "Resource URI required" });
+
+  try {
+    const result = mcpServer.readResource(uri);
+    res.json(result);
+  } catch (err: any) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
 async function startServer() {
-  // Start background proactive daemon
+  // Start background proactive daemon & MCP server
   try {
     const aiClient = getAI();
     predictiveDaemon.setAIClient(aiClient);
+    mcpServer.setAIClient(aiClient);
   } catch {}
   predictiveDaemon.start();
 

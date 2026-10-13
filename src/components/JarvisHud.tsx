@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Globe, 
   Terminal, 
@@ -16,11 +16,21 @@ import {
   Database,
   HeartPulse,
   Eye,
-  RefreshCw,
-  BellRing
+  BellRing,
+  Home,
+  Mic,
+  MicOff,
+  Cpu,
+  Lock,
+  Unlock,
+  Sliders,
+  Network
 } from 'lucide-react';
 import { Jarvis3DCore } from './Jarvis3DCore';
+import { JarvisHoloCad } from './JarvisHoloCad';
+import { JarvisMcpInspector } from './JarvisMcpInspector';
 import { jarvisAudio } from '../lib/audioEngine';
+import { duplexVoiceEngine } from '../lib/duplexVoice';
 
 interface JarvisHudProps {
   token: string | null;
@@ -31,7 +41,7 @@ interface JarvisHudProps {
 export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [show3DCore, setShow3DCore] = useState(true);
-  const [activeTab, setActiveTab] = useState<'intel' | 'compute' | 'swarm' | 'vault' | 'systems' | 'vision'>('intel');
+  const [activeTab, setActiveTab] = useState<'intel' | 'compute' | 'swarm' | 'vault' | 'systems' | 'vision' | 'iot' | 'cad' | 'host' | 'mcp'>('intel');
   
   // Tactical tool states
   const [searchQuery, setSearchQuery] = useState('');
@@ -48,17 +58,29 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
   const [proactiveAlerts, setProactiveAlerts] = useState<any[]>([]);
   const [visionSitrep, setVisionSitrep] = useState<string | null>(null);
 
+  // IoT & Host Systems
+  const [iotDevices, setIotDevices] = useState<any[]>([]);
+  const [hostDiagnostics, setHostDiagnostics] = useState<any>(null);
+
+  // Duplex Voice Barge-In State
+  const [isDuplexActive, setIsDuplexActive] = useState(false);
+  const [micVolume, setMicVolume] = useState(0);
+
   // Telemetry simulation
   const [arcPower, setArcPower] = useState(100);
   const [telemetryTicks, setTelemetryTicks] = useState(0);
 
-  // Periodic polling for proactive feed & Redis metrics
+  // Keep duplex engine synced with speech status
+  useEffect(() => {
+    duplexVoiceEngine.setJarvisSpeaking(isSpeaking);
+  }, [isSpeaking]);
+
+  // Periodic polling for telemetry
   useEffect(() => {
     const interval = setInterval(() => {
       setTelemetryTicks(t => (t + 1) % 360);
       setArcPower(98 + Math.floor(Math.random() * 3));
       
-      // Slight nominal biometric flutter
       setBiometrics(prev => ({
         ...prev,
         heartRate: Math.max(68, Math.min(88, prev.heartRate + (Math.random() > 0.5 ? 1 : -1))),
@@ -74,9 +96,10 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
 
     const pollData = async () => {
       try {
-        const [feedRes, redisRes] = await Promise.all([
+        const [feedRes, redisRes, iotRes] = await Promise.all([
           fetch('/api/jarvis/proactive/feed', { headers: { 'Authorization': `Bearer ${token}` } }),
-          fetch('/api/jarvis/redis/metrics', { headers: { 'Authorization': `Bearer ${token}` } })
+          fetch('/api/jarvis/redis/metrics', { headers: { 'Authorization': `Bearer ${token}` } }),
+          fetch('/api/jarvis/iot/devices', { headers: { 'Authorization': `Bearer ${token}` } })
         ]);
         if (feedRes.ok) {
           const feed = await feedRes.json();
@@ -91,6 +114,12 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
           const metrics = await redisRes.json();
           setRedisMetrics(metrics);
         }
+        if (iotRes.ok) {
+          const iotData = await iotRes.json();
+          if (Array.isArray(iotData.devices)) {
+            setIotDevices(iotData.devices);
+          }
+        }
       } catch (e) {
         // Silent recovery
       }
@@ -100,6 +129,29 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
     const daemonPoll = setInterval(pollData, 15000);
     return () => clearInterval(daemonPoll);
   }, [token]);
+
+  const toggleDuplexVoice = async () => {
+    if (isDuplexActive) {
+      duplexVoiceEngine.stopDuplexMonitoring();
+      setIsDuplexActive(false);
+      jarvisAudio.playTacticalChirp(600, 80);
+    } else {
+      const ok = await duplexVoiceEngine.startDuplexMonitoring({
+        onBargeIn: () => {
+          jarvisAudio.playTacticalChirp(1200, 80);
+          console.log("[Duplex Voice] Barge-in detected! Interrupted audio playback.");
+        },
+        onVolumeChange: (vol) => setMicVolume(vol)
+      });
+      if (ok) {
+        setIsDuplexActive(true);
+        jarvisAudio.playArcPulse();
+        onVocalize?.("Full duplex voice monitoring engaged with active barge-in detection, Sir.");
+      } else {
+        alert("Please enable microphone permissions in your browser to activate full-duplex voice.");
+      }
+    }
+  };
 
   const handleOpenToggle = () => {
     const next = !isOpen;
@@ -222,6 +274,40 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
     }
   };
 
+  const fetchHostDiagnostics = async () => {
+    if (!token) return;
+    jarvisAudio.playTacticalChirp(850, 90);
+    try {
+      const res = await fetch('/api/jarvis/host/diagnostics', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      setHostDiagnostics(data);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const triggerIotProtocol = async (protocolName: 'tactical_lockdown' | 'night_ambient' | 'nominal_work') => {
+    if (!token) return;
+    jarvisAudio.playArcPulse();
+    try {
+      const res = await fetch('/api/jarvis/iot/protocol', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ protocol: protocolName })
+      });
+      const data = await res.json();
+      if (Array.isArray(data.devices)) setIotDevices(data.devices);
+      if (data.message) onVocalize?.(data.message);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const runVisionAnalysis = async () => {
     if (!token) {
       alert("Please authenticate to perform visual analysis.");
@@ -231,7 +317,6 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
     setLoading(true);
     setVisionSitrep(null);
     try {
-      // Create a lightweight simulated HUD camera frame on an offscreen canvas
       const canvas = document.createElement('canvas');
       canvas.width = 400;
       canvas.height = 300;
@@ -318,6 +403,12 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
           <span>WEARABLE VITALS:</span>
           <span className="text-emerald-400 font-semibold">{biometrics.heartRate} BPM • {biometrics.stressIndex}% STRESS</span>
         </div>
+        <div className="flex items-center justify-between gap-3 text-slate-300">
+          <span>DUPLEX BARGE-IN:</span>
+          <span className={isDuplexActive ? "text-emerald-400 font-semibold" : "text-slate-500"}>
+            {isDuplexActive ? "ACTIVE (MIC ARMED)" : "DISABLED"}
+          </span>
+        </div>
       </div>
 
       {/* Top Center Proactive Telemetry Live Ticker */}
@@ -331,6 +422,21 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
 
       {/* Top Right Controls */}
       <div className="absolute top-4 right-4 pointer-events-auto flex items-center gap-2">
+        {/* Full Duplex Barge-In Toggle */}
+        <button
+          onClick={toggleDuplexVoice}
+          title={isDuplexActive ? "Duplex Voice Active (Click to mute mic monitoring)" : "Activate Full-Duplex Voice Barge-in"}
+          className={`p-1.5 rounded-xl border text-xs transition-all backdrop-blur-md flex items-center gap-1.5 ${
+            isDuplexActive 
+              ? 'bg-emerald-600/30 border-emerald-400 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.4)]' 
+              : 'bg-slate-900/80 border-slate-700 text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          {isDuplexActive ? <Mic className="w-3.5 h-3.5 animate-pulse text-emerald-400" /> : <MicOff className="w-3.5 h-3.5" />}
+          <span className="text-[10px] hidden sm:inline">{isDuplexActive ? "Duplex On" : "Duplex"}</span>
+        </button>
+
+        {/* 3D Core Toggle */}
         <button
           onClick={() => setShow3DCore(!show3DCore)}
           title="Toggle 3D Holographic Core"
@@ -343,6 +449,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
           <Layers className="w-3.5 h-3.5" />
         </button>
 
+        {/* Command Center Toggle */}
         <button
           onClick={handleOpenToggle}
           className="px-3 py-1.5 rounded-xl bg-cyan-950/85 hover:bg-cyan-900 border border-cyan-400/50 text-cyan-300 text-xs font-semibold flex items-center gap-2 shadow-[0_0_15px_rgba(6,182,212,0.3)] transition-all backdrop-blur-md"
@@ -363,8 +470,8 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
                 ⚡
               </div>
               <div>
-                <h3 className="font-bold text-cyan-300 text-sm tracking-wide">JARVIS Command Center</h3>
-                <p className="text-[10px] text-slate-400">Enterprise Redis Cache • Firestore DB • Predictive Daemon • Iron Legion</p>
+                <h3 className="font-bold text-cyan-300 text-sm tracking-wide">JARVIS Integrated Command Center</h3>
+                <p className="text-[10px] text-slate-400">Smart Facility IoT • Holographic CAD • Redis • Swarm • Duplex Engine</p>
               </div>
             </div>
             <button 
@@ -375,14 +482,12 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             </button>
           </div>
 
-          {/* 6-Tab Navigation */}
-          <div className="grid grid-cols-6 gap-1">
+          {/* 9-Tab Navigation */}
+          <div className="grid grid-cols-3 sm:grid-cols-9 gap-1">
             <button
               onClick={() => { setActiveTab('intel'); setResult(null); jarvisAudio.playTacticalChirp(700, 60); }}
               className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
-                activeTab === 'intel'
-                  ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200'
-                  : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                activeTab === 'intel' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
               <Globe className="w-3 h-3 text-cyan-400" />
@@ -392,9 +497,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             <button
               onClick={() => { setActiveTab('compute'); setResult(null); jarvisAudio.playTacticalChirp(750, 60); }}
               className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
-                activeTab === 'compute'
-                  ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200'
-                  : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                activeTab === 'compute' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
               <Terminal className="w-3 h-3 text-cyan-400" />
@@ -404,9 +507,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             <button
               onClick={() => { setActiveTab('swarm'); jarvisAudio.playTacticalChirp(800, 60); }}
               className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
-                activeTab === 'swarm'
-                  ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200'
-                  : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                activeTab === 'swarm' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
               <ShieldCheck className="w-3 h-3 text-cyan-400" />
@@ -416,9 +517,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             <button
               onClick={() => { setActiveTab('vault'); fetchKnowledgeVault(); jarvisAudio.playTacticalChirp(850, 60); }}
               className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
-                activeTab === 'vault'
-                  ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200'
-                  : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                activeTab === 'vault' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
               <Share2 className="w-3 h-3 text-cyan-400" />
@@ -426,11 +525,29 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             </button>
 
             <button
-              onClick={() => { setActiveTab('systems'); jarvisAudio.playTacticalChirp(900, 60); }}
+              onClick={() => { setActiveTab('cad'); jarvisAudio.playTacticalChirp(900, 60); }}
               className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
-                activeTab === 'systems'
-                  ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200'
-                  : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                activeTab === 'cad' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Layers className="w-3 h-3 text-cyan-400" />
+              <span>CAD 3D</span>
+            </button>
+
+            <button
+              onClick={() => { setActiveTab('iot'); jarvisAudio.playTacticalChirp(950, 60); }}
+              className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
+                activeTab === 'iot' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Home className="w-3 h-3 text-cyan-400" />
+              <span>IoT</span>
+            </button>
+
+            <button
+              onClick={() => { setActiveTab('systems'); jarvisAudio.playTacticalChirp(1000, 60); }}
+              className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
+                activeTab === 'systems' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
               <Database className="w-3 h-3 text-cyan-400" />
@@ -438,19 +555,27 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             </button>
 
             <button
-              onClick={() => { setActiveTab('vision'); jarvisAudio.playTacticalChirp(950, 60); }}
+              onClick={() => { setActiveTab('host'); fetchHostDiagnostics(); jarvisAudio.playTacticalChirp(1050, 60); }}
               className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
-                activeTab === 'vision'
-                  ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200'
-                  : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                activeTab === 'host' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Eye className="w-3 h-3 text-cyan-400" />
-              <span>Vision</span>
+              <Cpu className="w-3 h-3 text-cyan-400" />
+              <span>Host OS</span>
+            </button>
+
+            <button
+              onClick={() => { setActiveTab('mcp'); jarvisAudio.playTacticalChirp(1100, 60); }}
+              className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
+                activeTab === 'mcp' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Network className="w-3 h-3 text-cyan-400" />
+              <span>MCP</span>
             </button>
           </div>
 
-          {/* TAB 1: Search Grounding */}
+          {/* TAB: Search Grounding */}
           {activeTab === 'intel' && (
             <div className="flex flex-col gap-2">
               <label className="text-[11px] text-slate-300">
@@ -477,7 +602,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             </div>
           )}
 
-          {/* TAB 2: Python Code Exec */}
+          {/* TAB: Python Code Exec */}
           {activeTab === 'compute' && (
             <div className="flex flex-col gap-2">
               <label className="text-[11px] text-slate-300">
@@ -504,7 +629,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             </div>
           )}
 
-          {/* TAB 3: Iron Legion Swarm */}
+          {/* TAB: Iron Legion Swarm */}
           {activeTab === 'swarm' && (
             <div className="flex flex-col gap-2.5">
               <label className="text-[11px] text-slate-300">
@@ -560,7 +685,64 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             </div>
           )}
 
-          {/* TAB 4: Graph-RAG Vault */}
+          {/* TAB: 3D Holographic CAD Blueprint */}
+          {activeTab === 'cad' && (
+            <JarvisHoloCad />
+          )}
+
+          {/* TAB: Smart Facility IoT Bridge */}
+          {activeTab === 'iot' && (
+            <div className="flex flex-col gap-2.5">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-cyan-300 text-[11px] flex items-center gap-1">
+                  <Home className="w-3.5 h-3.5 text-cyan-400" /> Malibu Facility Smart IoT Network
+                </span>
+                {/* Fast Protocol Buttons */}
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => triggerIotProtocol('tactical_lockdown')}
+                    className="px-2 py-0.5 rounded bg-rose-950/80 hover:bg-rose-900 border border-rose-500/60 text-rose-300 text-[10px]"
+                  >
+                    Lockdown
+                  </button>
+                  <button
+                    onClick={() => triggerIotProtocol('night_ambient')}
+                    className="px-2 py-0.5 rounded bg-sky-950/80 hover:bg-sky-900 border border-sky-500/60 text-sky-300 text-[10px]"
+                  >
+                    Night
+                  </button>
+                  <button
+                    onClick={() => triggerIotProtocol('nominal_work')}
+                    className="px-2 py-0.5 rounded bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-500/60 text-cyan-300 text-[10px]"
+                  >
+                    Nominal
+                  </button>
+                </div>
+              </div>
+
+              {/* Devices Grid */}
+              <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+                {iotDevices.map(dev => (
+                  <div key={dev.id} className="bg-slate-950/80 border border-cyan-950 p-2 rounded-xl flex flex-col gap-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-cyan-300 text-[10px]">{dev.name}</span>
+                      <span className="text-[8px] uppercase px-1 py-0.2 rounded bg-cyan-950 text-cyan-400 border border-cyan-800">{dev.room}</span>
+                    </div>
+                    <div className="text-[9px] text-slate-300 flex flex-col gap-0.5">
+                      {Object.entries(dev.state || {}).map(([k, v]) => (
+                        <div key={k} className="flex justify-between">
+                          <span className="text-slate-500">{k}:</span>
+                          <span className="text-slate-300 font-mono">{String(v)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* TAB: Graph-RAG Vault */}
           {activeTab === 'vault' && (
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between text-[11px] text-slate-300">
@@ -597,11 +779,10 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             </div>
           )}
 
-          {/* TAB 5: Enterprise Systems & Redis Telemetry */}
+          {/* TAB: Enterprise Systems & Redis Telemetry */}
           {activeTab === 'systems' && (
             <div className="flex flex-col gap-2.5">
               <div className="grid grid-cols-2 gap-2">
-                {/* Redis Card */}
                 <div className="bg-slate-950/80 border border-cyan-500/30 p-2.5 rounded-xl flex flex-col gap-1">
                   <span className="font-bold text-cyan-300 text-[11px] flex items-center gap-1.5">
                     <Database className="w-3.5 h-3.5 text-cyan-400" /> In-Memory Redis Engine
@@ -614,7 +795,6 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
                   </div>
                 </div>
 
-                {/* Biometrics Card */}
                 <div className="bg-slate-950/80 border border-cyan-500/30 p-2.5 rounded-xl flex flex-col gap-1">
                   <span className="font-bold text-emerald-400 text-[11px] flex items-center gap-1.5">
                     <HeartPulse className="w-3.5 h-3.5 text-rose-400 animate-pulse" /> Wearable Biometrics
@@ -647,30 +827,36 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             </div>
           )}
 
-          {/* TAB 6: Multimodal Vision SITREP */}
-          {activeTab === 'vision' && (
+          {/* TAB: Host OS Kernel Diagnostics */}
+          {activeTab === 'host' && (
             <div className="flex flex-col gap-2">
-              <label className="text-[11px] text-slate-300">
-                Continuous Multimodal Environmental Vision Reconnaissance:
-              </label>
-              <button
-                onClick={runVisionAnalysis}
-                disabled={loading}
-                className="py-2 px-4 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-semibold transition-all flex items-center justify-center gap-2 shadow-md disabled:opacity-40"
-              >
-                {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
-                <span>Acquire Visual Reconnaissance Frame & Analyze SITREP</span>
-              </button>
+              <div className="flex items-center justify-between text-[11px] text-slate-300">
+                <span className="font-bold text-cyan-300 flex items-center gap-1">
+                  <Cpu className="w-3.5 h-3.5 text-cyan-400" /> Host OS Kernel & Memory Matrix
+                </span>
+                <button onClick={fetchHostDiagnostics} className="text-cyan-400 hover:underline text-[10px]">Refresh</button>
+              </div>
 
-              {visionSitrep && (
-                <div className="bg-slate-900/90 border border-cyan-500/40 rounded-xl p-3 flex flex-col gap-1 max-h-44 overflow-y-auto">
-                  <span className="text-cyan-300 font-bold text-[11px] flex items-center gap-1">
-                    <Sparkles className="w-3 h-3 text-cyan-400" /> Optical Telemetry SITREP:
-                  </span>
-                  <p className="text-slate-200 text-xs leading-relaxed whitespace-pre-wrap">{visionSitrep}</p>
+              {hostDiagnostics ? (
+                <div className="bg-slate-950 border border-cyan-500/30 rounded-xl p-3 grid grid-cols-2 gap-2 text-[10px]">
+                  <div><span className="text-slate-500">Platform:</span> <span className="text-white font-mono">{hostDiagnostics.platform} ({hostDiagnostics.arch})</span></div>
+                  <div><span className="text-slate-500">Kernel:</span> <span className="text-white font-mono">{hostDiagnostics.release}</span></div>
+                  <div><span className="text-slate-500">CPU Threads:</span> <span className="text-cyan-300 font-mono">{hostDiagnostics.cpus} cores</span></div>
+                  <div><span className="text-slate-500">CPU Model:</span> <span className="text-slate-300 truncate font-mono">{hostDiagnostics.cpuModel}</span></div>
+                  <div><span className="text-slate-500">Host RAM:</span> <span className="text-emerald-400 font-mono">{hostDiagnostics.freeMemoryMb} MB free / {hostDiagnostics.totalMemoryMb} MB</span></div>
+                  <div><span className="text-slate-500">Process Heap:</span> <span className="text-cyan-300 font-mono">{hostDiagnostics.processHeapUsedMb} MB</span></div>
+                  <div><span className="text-slate-500">Host Uptime:</span> <span className="text-slate-300 font-mono">{Math.floor(hostDiagnostics.uptimeSeconds / 3600)}h {Math.floor((hostDiagnostics.uptimeSeconds % 3600) / 60)}m</span></div>
+                  <div><span className="text-slate-500">Security Ring:</span> <span className="text-emerald-400 font-semibold">{hostDiagnostics.securityKernel}</span></div>
                 </div>
+              ) : (
+                <div className="text-center py-4 text-slate-500 text-xs">Querying Host OS Kernel Telemetry...</div>
               )}
             </div>
+          )}
+
+          {/* TAB: Model Context Protocol (MCP) Server Hub */}
+          {activeTab === 'mcp' && (
+            <JarvisMcpInspector token={token} />
           )}
 
           {/* General Result Display (Search / Compute) */}
