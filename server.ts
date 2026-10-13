@@ -18,6 +18,7 @@ import { mcpServer } from "./src/server/mcpServer";
 import { reinforcementScheduler } from "./src/server/reinforcementScheduler";
 import { config } from "./src/server/config";
 import { workspaceRouter } from "./src/server/routes/workspace";
+import { createMcpRouter } from "./src/server/routes/mcp";
 
 // --- Enterprise Security Setup ---
 const app = express();
@@ -832,38 +833,7 @@ app.get("/api/jarvis/reinforcement/metrics", requireAuth, (req, res) => {
 
 
 // --- Model Context Protocol (MCP) Endpoints ---
-app.get("/api/mcp/tools", requireAuth, (req, res) => {
-  res.json({ tools: mcpServer.listTools() });
-});
-
-app.post("/api/mcp/tools/call", requireAuth, async (req, res) => {
-  const { name, arguments: toolArgs } = req.body;
-  if (!name) return res.status(400).json({ error: "Tool name required" });
-
-  try {
-    const aiClient = getAI();
-    mcpServer.setAIClient(aiClient);
-  } catch {}
-
-  const result = await mcpServer.callTool(name, toolArgs || {});
-  res.json(result);
-});
-
-app.get("/api/mcp/resources", requireAuth, (req, res) => {
-  res.json({ resources: mcpServer.listResources() });
-});
-
-app.post("/api/mcp/resources/read", requireAuth, (req, res) => {
-  const { uri } = req.body;
-  if (!uri) return res.status(400).json({ error: "Resource URI required" });
-
-  try {
-    const result = mcpServer.readResource(uri);
-    res.json(result);
-  } catch (err: any) {
-    res.status(404).json({ error: err.message });
-  }
-});
+app.use("/api/mcp", createMcpRouter(getAI));
 
 async function startServer() {
   // Start background proactive daemon & MCP server
