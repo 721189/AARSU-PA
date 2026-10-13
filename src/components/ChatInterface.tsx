@@ -498,11 +498,10 @@ export function ChatInterface({
         }
       }
 
-      const res = await fetch('/api/chat', {
+      const res = await authenticatedFetch('/api/chat', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${currentToken}`
         },
         body: JSON.stringify({ 
           message: text, 

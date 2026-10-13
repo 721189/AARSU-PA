@@ -499,6 +499,89 @@ app.post("/api/jarvis/search", requireAuth, async (req, res) => {
   }
 });
 
+// --- Google Maps Grounding Endpoint (gemini-3.5-flash with googleMaps tool) ---
+app.post("/api/jarvis/maps", requireAuth, async (req, res) => {
+  try {
+    const { query, userLocation } = req.body;
+    if (!query) return res.status(400).json({ error: "Location query required" });
+
+    let aiClient: GoogleGenAI;
+    try {
+      aiClient = getAI();
+    } catch {
+      return res.status(500).json({ error: "AI core unavailable" });
+    }
+
+    const response = await aiClient.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: query,
+      config: {
+        systemInstruction: "You are J.A.R.V.I.S. Provide precise geographical positioning, navigation, local business intel, and mapping intelligence using Google Maps grounding. Address user as 'Sir'.",
+        tools: [{ googleMaps: {} }]
+      }
+    });
+
+    const metadata = (response.candidates?.[0] as any)?.groundingMetadata;
+    res.json({
+      reply: response.text || "Mapping intelligence acquired, Sir.",
+      mapsMetadata: metadata || null,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err: any) {
+    console.error("Maps Grounding Error:", err);
+    res.status(500).json({ error: "Failed to query Google Maps telemetry" });
+  }
+});
+
+// --- Realistic 3D Hologram & Image Generation Endpoint (gemini-3.1-flash-lite-image) ---
+app.post("/api/jarvis/generate-3d-image", requireAuth, async (req, res) => {
+  try {
+    const { prompt } = req.body;
+    if (!prompt) return res.status(400).json({ error: "Prompt required" });
+
+    let aiClient: GoogleGenAI;
+    try {
+      aiClient = getAI();
+    } catch {
+      return res.status(500).json({ error: "AI core unavailable" });
+    }
+
+    const enhancedPrompt = `Ultra-realistic 3D holographic render, cinematic sci-fi lighting, Stark Industries CAD wireframe overlay, photorealistic textures, 8k resolution, volumetric neon glow: ${prompt}`;
+
+    const response = await aiClient.models.generateImages({
+      model: "gemini-3.1-flash-lite-image",
+      prompt: enhancedPrompt,
+      config: {
+        numberOfImages: 1,
+        outputMimeType: "image/jpeg",
+        aspectRatio: "16:9",
+      },
+    });
+
+    const generatedImage = response.generatedImages?.[0];
+    if (!generatedImage?.image?.imageBytes) {
+      throw new Error("No image bytes returned from generation model.");
+    }
+
+    const base64Image = `data:image/jpeg;base64,${generatedImage.image.imageBytes}`;
+    res.json({
+      imageUrl: base64Image,
+      prompt: enhancedPrompt,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err: any) {
+    console.error("3D Image Generation Error:", err);
+    // Return a pristine fallback holographic schematic data URI if generation quota/key is limited
+    res.json({
+      imageUrl: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1200&q=80",
+      prompt: req.body.prompt,
+      fallback: true,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+
 // --- JARVIS Sandboxed Code Execution Endpoint ---
 app.post("/api/jarvis/code", requireAuth, async (req, res) => {
   try {

@@ -24,7 +24,9 @@ import {
   Lock,
   Unlock,
   Sliders,
-  Network
+  Network,
+  Camera,
+  RefreshCw
 } from 'lucide-react';
 import { Jarvis3DCore } from './Jarvis3DCore';
 import { JarvisHoloCad } from './JarvisHoloCad';
@@ -52,6 +54,10 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
   const [result, setResult] = useState<{ text: string; sources?: Array<{ title?: string; uri?: string }> } | null>(null);
   const [swarmResult, setSwarmResult] = useState<any>(null);
   const [graphData, setGraphData] = useState<any>(null);
+  const [selectedEntity, setSelectedEntity] = useState<string | null>(null);
+  const [subgraphData, setSubgraphData] = useState<any>(null);
+  const [subgraphLoading, setSubgraphLoading] = useState(false);
+  const [redisBenchMs, setRedisBenchMs] = useState<number | null>(null);
 
   // Enterprise Systems Telemetry
   const [redisMetrics, setRedisMetrics] = useState<any>(null);
@@ -356,6 +362,106 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
     }
   };
 
+  const handleToggleDevice = async (deviceId: string, key: string, currentVal: any) => {
+    let nextVal = currentVal;
+    if (typeof currentVal === 'boolean') {
+      nextVal = !currentVal;
+    } else if (currentVal === 'on') {
+      nextVal = 'off';
+    } else if (currentVal === 'off') {
+      nextVal = 'on';
+    } else if (currentVal === 'locked') {
+      nextVal = 'unlocked';
+    } else if (currentVal === 'unlocked') {
+      nextVal = 'locked';
+    } else if (currentVal === 'armed') {
+      nextVal = 'standby';
+    } else if (currentVal === 'standby') {
+      nextVal = 'armed';
+    }
+    jarvisAudio.playTacticalChirp(920, 60);
+    try {
+      const res = await authenticatedFetch('/api/jarvis/iot/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId, state: { [key]: nextVal } })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setIotDevices(prev => prev.map(d => d.id === deviceId ? data.device : d));
+        onVocalize?.(`${deviceId.replace(/-/g, ' ')} set to ${nextVal}, Sir.`);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const inspectVaultEntity = async (entityId: string) => {
+    setSelectedEntity(entityId);
+    setSubgraphLoading(true);
+    jarvisAudio.playTacticalChirp(850, 70);
+    try {
+      const res = await authenticatedFetch(`/api/jarvis/graph?entityId=${encodeURIComponent(entityId)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSubgraphData(data);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSubgraphLoading(false);
+    }
+  };
+
+  const simulateStressSpike = async () => {
+    const spike = { heartRate: 114, stressIndex: 82, focusLevel: 65, coreTempC: 37.4 };
+    setBiometrics(spike);
+    jarvisAudio.playTacticalChirp(400, 150, 'sawtooth');
+    try {
+      await authenticatedFetch('/api/jarvis/biometrics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(spike)
+      });
+      onVocalize?.("Warning: elevated cardiovascular telemetry detected, Sir.");
+    } catch {}
+  };
+
+  const normalizeVitals = async () => {
+    const normal = { heartRate: 72, stressIndex: 18, focusLevel: 94, coreTempC: 36.8 };
+    setBiometrics(normal);
+    jarvisAudio.playTacticalChirp(880, 80);
+    try {
+      await authenticatedFetch('/api/jarvis/biometrics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(normal)
+      });
+      onVocalize?.("Biometric telemetry normalized to nominal resting baseline, Sir.");
+    } catch {}
+  };
+
+  const runRedisBenchmark = async () => {
+    const t0 = performance.now();
+    try {
+      await authenticatedFetch('/api/jarvis/redis/metrics');
+      const t1 = performance.now();
+      const latency = Number((t1 - t0).toFixed(2));
+      setRedisBenchMs(latency);
+      jarvisAudio.playTacticalChirp(1200, 60);
+      onVocalize?.(`Cache benchmark registered at ${latency} milliseconds latency, Sir.`);
+    } catch {}
+  };
+
+  const deploySwarmPreset = (presetText: string) => {
+    setSwarmObjective(presetText);
+    jarvisAudio.playArcPulse();
+    // Directly run with that preset
+    setTimeout(() => {
+      runIronLegionSwarm();
+    }, 50);
+  };
+
   return (
     <div className="absolute inset-0 pointer-events-none z-10 overflow-hidden select-none">
       
@@ -480,12 +586,12 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             </button>
           </div>
 
-          {/* 9-Tab Navigation */}
-          <div className="grid grid-cols-3 sm:grid-cols-9 gap-1">
+          {/* 10-Tab Navigation Matrix */}
+          <div className="grid grid-cols-5 sm:grid-cols-10 gap-1">
             <button
               onClick={() => { setActiveTab('intel'); setResult(null); jarvisAudio.playTacticalChirp(700, 60); }}
               className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
-                activeTab === 'intel' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                activeTab === 'intel' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200 shadow-sm' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
               <Globe className="w-3 h-3 text-cyan-400" />
@@ -495,7 +601,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             <button
               onClick={() => { setActiveTab('compute'); setResult(null); jarvisAudio.playTacticalChirp(750, 60); }}
               className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
-                activeTab === 'compute' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                activeTab === 'compute' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200 shadow-sm' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
               <Terminal className="w-3 h-3 text-cyan-400" />
@@ -505,7 +611,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             <button
               onClick={() => { setActiveTab('swarm'); jarvisAudio.playTacticalChirp(800, 60); }}
               className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
-                activeTab === 'swarm' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                activeTab === 'swarm' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200 shadow-sm' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
               <ShieldCheck className="w-3 h-3 text-cyan-400" />
@@ -513,9 +619,19 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             </button>
 
             <button
+              onClick={() => { setActiveTab('vision'); runVisionAnalysis(); jarvisAudio.playTacticalChirp(1080, 60); }}
+              className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
+                activeTab === 'vision' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200 shadow-sm' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Eye className="w-3 h-3 text-cyan-400" />
+              <span>Vision</span>
+            </button>
+
+            <button
               onClick={() => { setActiveTab('vault'); fetchKnowledgeVault(); jarvisAudio.playTacticalChirp(850, 60); }}
               className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
-                activeTab === 'vault' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                activeTab === 'vault' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200 shadow-sm' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
               <Share2 className="w-3 h-3 text-cyan-400" />
@@ -525,7 +641,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             <button
               onClick={() => { setActiveTab('cad'); jarvisAudio.playTacticalChirp(900, 60); }}
               className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
-                activeTab === 'cad' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                activeTab === 'cad' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200 shadow-sm' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
               <Layers className="w-3 h-3 text-cyan-400" />
@@ -535,7 +651,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             <button
               onClick={() => { setActiveTab('iot'); jarvisAudio.playTacticalChirp(950, 60); }}
               className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
-                activeTab === 'iot' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                activeTab === 'iot' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200 shadow-sm' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
               <Home className="w-3 h-3 text-cyan-400" />
@@ -545,7 +661,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             <button
               onClick={() => { setActiveTab('systems'); jarvisAudio.playTacticalChirp(1000, 60); }}
               className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
-                activeTab === 'systems' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                activeTab === 'systems' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200 shadow-sm' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
               <Database className="w-3 h-3 text-cyan-400" />
@@ -555,7 +671,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             <button
               onClick={() => { setActiveTab('host'); fetchHostDiagnostics(); jarvisAudio.playTacticalChirp(1050, 60); }}
               className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
-                activeTab === 'host' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                activeTab === 'host' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200 shadow-sm' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
               <Cpu className="w-3 h-3 text-cyan-400" />
@@ -565,7 +681,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             <button
               onClick={() => { setActiveTab('mcp'); jarvisAudio.playTacticalChirp(1100, 60); }}
               className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
-                activeTab === 'mcp' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                activeTab === 'mcp' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200 shadow-sm' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
               <Network className="w-3 h-3 text-cyan-400" />
@@ -652,6 +768,29 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
                 </button>
               </div>
 
+              {/* Fast Mission Presets */}
+              <div className="flex flex-wrap gap-1.5 items-center">
+                <span className="text-[10px] text-slate-400">Presets:</span>
+                <button
+                  onClick={() => deploySwarmPreset("Full Codebase Security & Zero-Day Perimeter Audit")}
+                  className="px-2 py-0.5 rounded bg-cyan-950/70 hover:bg-cyan-900 border border-cyan-800 text-[10px] text-cyan-300 transition-colors"
+                >
+                  🛡️ Security Audit
+                </button>
+                <button
+                  onClick={() => deploySwarmPreset("High-Throughput Concurrency & Memory Stress Test")}
+                  className="px-2 py-0.5 rounded bg-cyan-950/70 hover:bg-cyan-900 border border-cyan-800 text-[10px] text-cyan-300 transition-colors"
+                >
+                  ⚡ Concurrency Stress
+                </button>
+                <button
+                  onClick={() => deploySwarmPreset("Global Threat Assessment & Uplink Integrity Check")}
+                  className="px-2 py-0.5 rounded bg-cyan-950/70 hover:bg-cyan-900 border border-cyan-800 text-[10px] text-cyan-300 transition-colors"
+                >
+                  🌐 Threat Assessment
+                </button>
+              </div>
+
               {swarmResult && (
                 <div className="bg-slate-900/90 border border-emerald-500/40 rounded-xl p-3 flex flex-col gap-2 max-h-48 overflow-y-auto">
                   <div className="flex items-center justify-between text-emerald-400 font-semibold text-[11px]">
@@ -664,7 +803,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
                       </span>
                     )}
                   </div>
-                  <p className="text-slate-200 text-xs">{swarmResult.synthesizedConclusion}</p>
+                  <p className="text-slate-200 text-xs leading-relaxed">{swarmResult.synthesizedConclusion}</p>
                   
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 mt-1">
                     {swarmResult.reports?.map((r: any, idx: number) => (
@@ -678,6 +817,67 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB: Continuous Vision SITREP */}
+          {activeTab === 'vision' && (
+            <div className="flex flex-col gap-2.5">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-cyan-300 text-[11px] flex items-center gap-1.5">
+                  <Eye className="w-3.5 h-3.5 text-cyan-400" /> Continuous Optical Telemetry & Multimodal SITREP
+                </span>
+                <button
+                  onClick={runVisionAnalysis}
+                  disabled={loading}
+                  className="px-3 py-1 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-[10px] transition-all flex items-center gap-1.5 disabled:opacity-40"
+                >
+                  {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Camera className="w-3 h-3" />}
+                  <span>Scan Optical Feed</span>
+                </button>
+              </div>
+
+              {/* Optical Targeting Reticle Frame */}
+              <div className="relative bg-slate-950 border border-cyan-500/40 rounded-xl p-3 overflow-hidden flex flex-col items-center justify-center min-h-[130px]">
+                <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(6,182,212,0.12)_0%,transparent_70%)] pointer-events-none" />
+                <div className="absolute top-2 left-2 text-[9px] font-mono text-cyan-400">
+                  [ OPTICAL SENSOR: ONLINE ]
+                </div>
+                <div className="absolute top-2 right-2 text-[9px] font-mono text-emerald-400">
+                  FPS: 60 • 4K HDR • MULTIMODAL
+                </div>
+
+                <div className="relative w-20 h-20 border border-cyan-400/40 rounded-full flex items-center justify-center animate-pulse">
+                  <div className="w-14 h-14 border border-cyan-400/60 rounded-full border-dashed animate-[spin_10s_linear_infinite]" />
+                  <div className="absolute w-2 h-2 bg-cyan-400 rounded-full shadow-[0_0_8px_#22d3ee]" />
+                  <div className="absolute top-0 w-0.5 h-2.5 bg-cyan-400" />
+                  <div className="absolute bottom-0 w-0.5 h-2.5 bg-cyan-400" />
+                  <div className="absolute left-0 h-0.5 w-2.5 bg-cyan-400" />
+                  <div className="absolute right-0 h-0.5 w-2.5 bg-cyan-400" />
+                </div>
+
+                <div className="mt-2 text-[10px] text-cyan-300 font-mono tracking-wider">
+                  TARGET LOCK ACQUIRED • READY FOR SITREP
+                </div>
+              </div>
+
+              {/* SITREP readout */}
+              {visionSitrep && (
+                <div className="bg-slate-900/95 border border-cyan-500/50 rounded-xl p-3 flex flex-col gap-1.5 animate-in fade-in duration-200">
+                  <div className="flex items-center justify-between text-cyan-300 font-semibold text-[11px]">
+                    <span className="flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Optical Telemetry SITREP
+                    </span>
+                    <button 
+                      onClick={() => onVocalize?.(visionSitrep)}
+                      className="text-[10px] text-cyan-400 hover:underline"
+                    >
+                      Vocalize SITREP ▶
+                    </button>
+                  </div>
+                  <p className="text-slate-200 text-xs leading-relaxed whitespace-pre-wrap">{visionSitrep}</p>
                 </div>
               )}
             </div>
@@ -718,19 +918,31 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
                 </div>
               </div>
 
-              {/* Devices Grid */}
+              {/* Devices Grid with Live Interactive Controls */}
               <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
                 {iotDevices.map(dev => (
-                  <div key={dev.id} className="bg-slate-950/80 border border-cyan-950 p-2 rounded-xl flex flex-col gap-1">
+                  <div key={dev.id} className="bg-slate-950/80 border border-cyan-950 p-2 rounded-xl flex flex-col gap-1.5">
                     <div className="flex items-center justify-between">
-                      <span className="font-bold text-cyan-300 text-[10px]">{dev.name}</span>
+                      <span className="font-bold text-cyan-300 text-[10px] truncate">{dev.name}</span>
                       <span className="text-[8px] uppercase px-1 py-0.2 rounded bg-cyan-950 text-cyan-400 border border-cyan-800">{dev.room}</span>
                     </div>
-                    <div className="text-[9px] text-slate-300 flex flex-col gap-0.5">
+
+                    <div className="text-[9px] text-slate-300 flex flex-col gap-1">
                       {Object.entries(dev.state || {}).map(([k, v]) => (
-                        <div key={k} className="flex justify-between">
-                          <span className="text-slate-500">{k}:</span>
-                          <span className="text-slate-300 font-mono">{String(v)}</span>
+                        <div key={k} className="flex items-center justify-between bg-slate-900/60 px-1.5 py-0.5 rounded">
+                          <span className="text-slate-400">{k}:</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-white font-mono">{String(v)}</span>
+                            {/* Interactive toggle switch for boolean / status keys */}
+                            {(k === 'power' || k === 'lockStatus' || k === 'gridStatus' || k === 'blastShield') && (
+                              <button
+                                onClick={() => handleToggleDevice(dev.id, k, v)}
+                                className="px-1.5 py-0.2 rounded text-[8px] bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-800"
+                              >
+                                Toggle
+                              </button>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -745,28 +957,69 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between text-[11px] text-slate-300">
                 <span>The Vault: Associative Neural Knowledge Graph ({graphData?.nodes?.length || 0} nodes, {graphData?.edges?.length || 0} edges)</span>
-                <button 
-                  onClick={fetchKnowledgeVault}
-                  className="text-cyan-400 hover:underline text-[10px]"
-                >
-                  Refresh
-                </button>
+                <div className="flex items-center gap-2">
+                  {selectedEntity && (
+                    <button
+                      onClick={() => { setSelectedEntity(null); setSubgraphData(null); }}
+                      className="text-amber-400 hover:underline text-[10px]"
+                    >
+                      Clear Focus
+                    </button>
+                  )}
+                  <button 
+                    onClick={fetchKnowledgeVault}
+                    className="text-cyan-400 hover:underline text-[10px]"
+                  >
+                    Refresh
+                  </button>
+                </div>
               </div>
 
               {graphData ? (
-                <div className="bg-slate-900/90 border border-cyan-500/30 rounded-xl p-3 flex flex-col gap-2 max-h-48 overflow-y-auto">
-                  <div className="grid grid-cols-2 gap-2 text-[10px]">
-                    {graphData.nodes?.map((node: any) => (
-                      <div key={node.id} className="bg-slate-950 p-2 rounded-lg border border-cyan-950 flex flex-col gap-1">
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-cyan-300">{node.label}</span>
-                          <span className="text-[8px] uppercase px-1 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800">{node.type}</span>
-                        </div>
-                        <div className="text-[9px] text-slate-400">
-                          {Object.entries(node.properties || {}).map(([k, v]) => `${k}: ${v}`).join(' | ')}
-                        </div>
+                <div className="flex flex-col gap-2 max-h-52 overflow-y-auto">
+                  {/* Selected Sub-Graph Explorer Banner */}
+                  {subgraphData && (
+                    <div className="bg-cyan-950/60 border border-cyan-500/40 rounded-xl p-2.5 flex flex-col gap-1 text-[10px]">
+                      <span className="font-bold text-cyan-300 flex items-center gap-1">
+                        <Share2 className="w-3 h-3 text-cyan-400" /> Focused Entity: {subgraphData.entityId}
+                      </span>
+                      <div className="text-[9px] text-slate-300">
+                        {subgraphData.connectedEdges?.length || 0} active associations connected to neural memory.
                       </div>
-                    ))}
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {subgraphData.neighbors?.map((n: any) => (
+                          <span key={n.id} className="px-1.5 py-0.5 rounded bg-slate-900 text-cyan-300 border border-cyan-800 text-[9px]">
+                            {n.label} ({n.type})
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Nodes Grid */}
+                  <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+                    {graphData.nodes?.map((node: any) => {
+                      const isFocused = selectedEntity === node.id;
+                      return (
+                        <div 
+                          key={node.id} 
+                          onClick={() => inspectVaultEntity(node.id)}
+                          className={`p-2 rounded-lg border cursor-pointer transition-all flex flex-col gap-1 ${
+                            isFocused 
+                              ? 'bg-cyan-950/90 border-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.4)]' 
+                              : 'bg-slate-950 hover:bg-slate-900 border-cyan-950'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-cyan-300">{node.label}</span>
+                            <span className="text-[8px] uppercase px-1 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800">{node.type}</span>
+                          </div>
+                          <div className="text-[9px] text-slate-400 truncate">
+                            {Object.entries(node.properties || {}).map(([k, v]) => `${k}: ${v}`).join(' | ')}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               ) : (
@@ -781,22 +1034,48 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
           {activeTab === 'systems' && (
             <div className="flex flex-col gap-2.5">
               <div className="grid grid-cols-2 gap-2">
-                <div className="bg-slate-950/80 border border-cyan-500/30 p-2.5 rounded-xl flex flex-col gap-1">
-                  <span className="font-bold text-cyan-300 text-[11px] flex items-center gap-1.5">
-                    <Database className="w-3.5 h-3.5 text-cyan-400" /> In-Memory Redis Engine
-                  </span>
+                <div className="bg-slate-950/80 border border-cyan-500/30 p-2.5 rounded-xl flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-cyan-300 text-[11px] flex items-center gap-1.5">
+                      <Database className="w-3.5 h-3.5 text-cyan-400" /> In-Memory Redis Engine
+                    </span>
+                    <button
+                      onClick={runRedisBenchmark}
+                      className="text-[9px] text-cyan-300 hover:text-white bg-cyan-950 px-1.5 py-0.5 rounded border border-cyan-800"
+                    >
+                      Benchmark
+                    </button>
+                  </div>
                   <div className="grid grid-cols-2 gap-1 text-[10px] text-slate-300">
                     <div>Hit Ratio: <span className="text-emerald-400 font-semibold">{redisMetrics?.hitRatio || '99.4%'}</span></div>
                     <div>Total Keys: <span className="text-cyan-300 font-semibold">{redisMetrics?.totalKeys || '14'}</span></div>
                     <div>Hits: <span className="text-slate-300">{redisMetrics?.hits || '48'}</span></div>
-                    <div>Memory: <span className="text-slate-300">{redisMetrics?.memoryEstimatedKb || '12'} KB</span></div>
+                    <div>Latency: <span className="text-emerald-400 font-mono font-semibold">{redisBenchMs !== null ? `${redisBenchMs}ms` : '< 1ms'}</span></div>
                   </div>
                 </div>
 
-                <div className="bg-slate-950/80 border border-cyan-500/30 p-2.5 rounded-xl flex flex-col gap-1">
-                  <span className="font-bold text-emerald-400 text-[11px] flex items-center gap-1.5">
-                    <HeartPulse className="w-3.5 h-3.5 text-rose-400 animate-pulse" /> Wearable Biometrics
-                  </span>
+                <div className="bg-slate-950/80 border border-cyan-500/30 p-2.5 rounded-xl flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-emerald-400 text-[11px] flex items-center gap-1.5">
+                      <HeartPulse className="w-3.5 h-3.5 text-rose-400 animate-pulse" /> Wearable Biometrics
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={simulateStressSpike}
+                        title="Simulate elevated stress level to test proactive alert triggers"
+                        className="text-[9px] text-rose-300 hover:text-white bg-rose-950/70 px-1.5 py-0.5 rounded border border-rose-800"
+                      >
+                        Stress Spike
+                      </button>
+                      <button
+                        onClick={normalizeVitals}
+                        title="Reset vitals to optimal resting baseline"
+                        className="text-[9px] text-emerald-300 hover:text-white bg-emerald-950/70 px-1.5 py-0.5 rounded border border-emerald-800"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                  </div>
                   <div className="grid grid-cols-2 gap-1 text-[10px] text-slate-300">
                     <div>Heart Rate: <span className="text-emerald-400 font-semibold">{biometrics.heartRate} BPM</span></div>
                     <div>Stress Index: <span className="text-cyan-300 font-semibold">{biometrics.stressIndex}%</span></div>

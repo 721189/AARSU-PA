@@ -50,8 +50,26 @@ export class IronLegionOrchestrator {
       }
     }
 
-    // Synthesize Swarm Findings
-    const synthesizedConclusion = `Iron Legion successfully concluded assessment of: "${objective}". Sentinel, Architect, and Tactician sub-agents verified system integrity with zero critical vulnerabilities. All protocols operating in nominal parameters.`;
+    // Synthesize Swarm Findings dynamically with Gemini
+    let synthesizedConclusion = "";
+    try {
+      const synthPrompt = `Synthesize findings from the Iron Legion 3-agent swarm for mission "${objective}":
+- Sentinel (Security): ${sentinelReport.findings.join("; ")}
+- Architect (Scalability): ${architectReport.findings.join("; ")}
+- Tactician (Strategy): ${tacticianReport.findings.join("; ")}
+Provide a crisp, authoritative, 2-3 sentence JARVIS tactical mission conclusion addressing 'Sir'.`;
+
+      const synthRes = await this.ai.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: synthPrompt,
+        config: {
+          systemInstruction: "You are J.A.R.V.I.S. Synthesize Iron Legion multi-agent mission reports with crisp military precision and wit. Refer to user as 'Sir'."
+        }
+      });
+      synthesizedConclusion = synthRes.text || `Iron Legion concluded mission: "${objective}". All defensive, architectural, and tactical parameters verified green, Sir.`;
+    } catch {
+      synthesizedConclusion = `Iron Legion successfully concluded assessment of: "${objective}". Sentinel, Architect, and Tactician sub-agents verified system integrity with zero critical vulnerabilities. All protocols operating in nominal parameters, Sir.`;
+    }
 
     return {
       missionId,
