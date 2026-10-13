@@ -16,11 +16,13 @@ import { predictiveDaemon } from "./src/server/predictiveDaemon";
 import { iotBridge } from "./src/server/iotBridge";
 import { mcpServer } from "./src/server/mcpServer";
 import { reinforcementScheduler } from "./src/server/reinforcementScheduler";
+import { config } from "./src/server/config";
+import { workspaceRouter } from "./src/server/routes/workspace";
+import { createMcpRouter } from "./src/server/routes/mcp";
 
 // --- Enterprise Security Setup ---
 const app = express();
 app.set('trust proxy', 1);
-const PORT = 3000;
 
 // Security Middleware
 app.use(helmet({
@@ -43,7 +45,7 @@ startBackupCron();
 // --- API Client ---
 let ai: GoogleGenAI | null = null;
 function getAI() {
-  const key = process.env.GEMINI_API_KEY;
+  const key = config.geminiApiKey;
   if (!key) throw new Error("GEMINI_API_KEY is missing");
   if (!ai) {
     ai = new GoogleGenAI({
@@ -418,30 +420,7 @@ app.post("/api/agent/run", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/api/fs/workspace", requireAuth, async (req, res) => {
-  try {
-    const fs = await import("fs/promises");
-    const path = await import("path");
-    
-    const rootDir = process.cwd();
-    const pkgRaw = await fs.readFile(path.join(rootDir, "package.json"), "utf-8").catch(() => "{}");
-    const metaRaw = await fs.readFile(path.join(rootDir, "metadata.json"), "utf-8").catch(() => "{}");
-    
-    const pkg = JSON.parse(pkgRaw);
-    const meta = JSON.parse(metaRaw);
-
-    res.json({
-      workspaceName: meta.name || "Aarsu JARVIS System",
-      version: pkg.version || "1.0.0",
-      dependencies: Object.keys(pkg.dependencies || {}),
-      status: "Operational",
-      securityLevel: "Maximum (JARVIS Protocol)",
-      uptime: process.uptime()
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: "Failed to query workspace state" });
-  }
-});
+app.use("/api/fs", workspaceRouter);
 
 // --- JARVIS Live Google Search Grounding Endpoint ---
 app.post("/api/jarvis/search", requireAuth, async (req, res) => {
@@ -854,38 +833,7 @@ app.get("/api/jarvis/reinforcement/metrics", requireAuth, (req, res) => {
 
 
 // --- Model Context Protocol (MCP) Endpoints ---
-app.get("/api/mcp/tools", requireAuth, (req, res) => {
-  res.json({ tools: mcpServer.listTools() });
-});
-
-app.post("/api/mcp/tools/call", requireAuth, async (req, res) => {
-  const { name, arguments: toolArgs } = req.body;
-  if (!name) return res.status(400).json({ error: "Tool name required" });
-
-  try {
-    const aiClient = getAI();
-    mcpServer.setAIClient(aiClient);
-  } catch {}
-
-  const result = await mcpServer.callTool(name, toolArgs || {});
-  res.json(result);
-});
-
-app.get("/api/mcp/resources", requireAuth, (req, res) => {
-  res.json({ resources: mcpServer.listResources() });
-});
-
-app.post("/api/mcp/resources/read", requireAuth, (req, res) => {
-  const { uri } = req.body;
-  if (!uri) return res.status(400).json({ error: "Resource URI required" });
-
-  try {
-    const result = mcpServer.readResource(uri);
-    res.json(result);
-  } catch (err: any) {
-    res.status(404).json({ error: err.message });
-  }
-});
+app.use("/api/mcp", createMcpRouter(getAI));
 
 async function startServer() {
   // Start background proactive daemon & MCP server
@@ -896,7 +844,7 @@ async function startServer() {
   } catch {}
   predictiveDaemon.start();
 
-  if (process.env.NODE_ENV !== "production") {
+  if (config.nodeEnv !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true, hmr: false },
       appType: "spa",
@@ -910,8 +858,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Enterprise Aarsu server running on http://0.0.0.0:${PORT}`);
+  app.listen(config.port, "0.0.0.0", () => {
+    console.log(`Enterprise Aarsu server running on http://0.0.0.0:${config.port}`);
   });
 }
 
