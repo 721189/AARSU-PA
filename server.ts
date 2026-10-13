@@ -17,6 +17,7 @@ import { iotBridge } from "./src/server/iotBridge";
 import { mcpServer } from "./src/server/mcpServer";
 import { reinforcementScheduler } from "./src/server/reinforcementScheduler";
 import { config } from "./src/server/config";
+import { workspaceRouter } from "./src/server/routes/workspace";
 
 // --- Enterprise Security Setup ---
 const app = express();
@@ -418,39 +419,7 @@ app.post("/api/agent/run", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/api/fs/workspace", requireAuth, async (req, res) => {
-  try {
-    const fs = await import("fs/promises");
-    const path = await import("path");
-    
-    const rootDir = process.cwd();
-    const pkgRaw = await fs.readFile(path.join(rootDir, "package.json"), "utf-8").catch(() => "{}");
-    const metaRaw = await fs.readFile(path.join(rootDir, "metadata.json"), "utf-8").catch(() => "{}");
-    
-    const pkg = JSON.parse(pkgRaw);
-    const meta = JSON.parse(metaRaw);
-
-    res.json({
-      workspaceName: meta.name || "Aarsu JARVIS System",
-      version: pkg.version || "1.0.0",
-      dependencies: Object.keys(pkg.dependencies || {}),
-      status: "Operational",
-      securityLevel: "Maximum (JARVIS Protocol)",
-      uptime: process.uptime(),
-      simulationMode: config.simulationMode,
-      simulatedServices: config.simulationMode
-        ? [
-            "IoT bridge (simulated devices)",
-            "Biometric telemetry (simulated/in-memory)",
-            "Knowledge graph (in-memory)",
-            "Redis-like cache (in-memory)",
-          ]
-        : []
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: "Failed to query workspace state" });
-  }
-});
+app.use("/api/fs", workspaceRouter);
 
 // --- JARVIS Live Google Search Grounding Endpoint ---
 app.post("/api/jarvis/search", requireAuth, async (req, res) => {
