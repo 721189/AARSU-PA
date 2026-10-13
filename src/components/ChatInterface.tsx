@@ -25,6 +25,8 @@ import { ChatMessage, Emotion, SpeechViseme } from '../types';
 import { signInWithGoogle, initAuth, auth, authenticatedFetch, getFreshIdToken } from '../lib/firebase';
 import { saveToMemory, retrieveContext } from '../lib/memory';
 import { VisionManager, VisionManagerHandle } from './VisionManager';
+import { voiceHotkeyEngine } from '../lib/voiceHotkeyEngine';
+import { jarvisAudio } from '../lib/audioEngine';
 
 interface ChatInterfaceProps {
   onEmotionChange: (emotion: Emotion) => void;
@@ -178,6 +180,27 @@ export function ChatInterface({
     );
     return () => unsubscribe();
   }, []);
+
+  // Global Hotkey & Speech-to-Text Pipeline Integration
+  useEffect(() => {
+    voiceHotkeyEngine.init({
+      onCommandRecognized: (transcript) => {
+        setInput(transcript);
+        handleSend(transcript);
+      },
+      onWakeWordDetected: () => {
+        jarvisAudio.playTacticalChirp(900, 100);
+        speak("At your service, Sir.");
+      },
+      onStatusChange: (status) => {
+        setIsListening(status === 'listening');
+      }
+    });
+
+    return () => {
+      voiceHotkeyEngine.destroy();
+    };
+  }, [firebaseToken, workspaceToken]);
 
   // Initialize and prioritize soft female speech synthesis voices
   useEffect(() => {
@@ -566,34 +589,10 @@ export function ChatInterface({
   };
 
   const startListening = () => {
-    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      const recognition = new SpeechRecognition();
-      recognition.continuous = false;
-      recognition.interimResults = false;
-
-      recognition.onstart = () => {
-        setIsListening(true);
-      };
-
-      recognition.onresult = (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        setInput(transcript);
-        handleSend(transcript);
-      };
-
-      recognition.onerror = (event: any) => {
-        console.error(event.error);
-        setIsListening(false);
-      };
-
-      recognition.onend = () => {
-        setIsListening(false);
-      };
-
-      recognition.start();
-    } else {
-      speak("Speech recognition is not supported in this browser.");
+    const active = voiceHotkeyEngine.toggleListening();
+    setIsListening(active);
+    if (active) {
+      jarvisAudio.playArcPulse();
     }
   };
 
