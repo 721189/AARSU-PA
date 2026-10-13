@@ -15,6 +15,7 @@ import { dbService } from "./src/server/dbService";
 import { predictiveDaemon } from "./src/server/predictiveDaemon";
 import { iotBridge } from "./src/server/iotBridge";
 import { mcpServer } from "./src/server/mcpServer";
+import { reinforcementScheduler } from "./src/server/reinforcementScheduler";
 
 // --- Enterprise Security Setup ---
 const app = express();
@@ -808,6 +809,42 @@ app.get("/api/jarvis/host/diagnostics", requireAuth, async (req, res) => {
     securityKernel: "Enforced (JARVIS Root Guardian)"
   });
 });
+
+// --- Proactive Task Scheduling & Reinforcement Learning Endpoints ---
+app.get("/api/jarvis/proactive/tasks", requireAuth, (req, res) => {
+  res.json({ suggestions: reinforcementScheduler.getSuggestions() });
+});
+
+app.post("/api/jarvis/proactive/analyze", requireAuth, async (req, res) => {
+  try {
+    const { token } = req.body;
+    try {
+      const aiClient = getAI();
+      reinforcementScheduler.setAIClient(aiClient);
+    } catch {}
+
+    const tasks = await reinforcementScheduler.analyzeWorkspaceForProactiveTasks(token);
+    res.json({ status: "success", count: tasks.length, suggestions: tasks });
+  } catch (err: any) {
+    console.error("Proactive Analysis Error:", err);
+    res.status(500).json({ error: "Failed to analyze calendar and emails for proactive tasks" });
+  }
+});
+
+app.post("/api/jarvis/reinforcement/feedback", requireAuth, (req, res) => {
+  const { suggestionId, feedback } = req.body;
+  if (!suggestionId || !feedback) {
+    return res.status(400).json({ error: "suggestionId and feedback required" });
+  }
+
+  const result = reinforcementScheduler.recordFeedback(suggestionId, feedback);
+  res.json({ status: "recorded", ...result, metrics: reinforcementScheduler.getReinforcementMetrics() });
+});
+
+app.get("/api/jarvis/reinforcement/metrics", requireAuth, (req, res) => {
+  res.json(reinforcementScheduler.getReinforcementMetrics());
+});
+
 
 // --- Model Context Protocol (MCP) Endpoints ---
 app.get("/api/mcp/tools", requireAuth, (req, res) => {
