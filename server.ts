@@ -78,7 +78,7 @@ const embeddingCache = new Map<string, number[]>();
 // Helper function to robustly generate Gemini responses with automatic retry and model fallbacks
 async function generateContentWithFallback(aiClient: GoogleGenAI, contents: any, systemInstruction: string): Promise<string> {
   // Use valid, active models from @google/genai guidelines
-  const models = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-flash-latest"];
+  const models = ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-2.5-flash"];
   let lastError: any = null;
 
   for (const model of models) {
@@ -550,7 +550,7 @@ app.post("/api/jarvis/generate-3d-image", requireAuth, async (req, res) => {
     const enhancedPrompt = `Ultra-realistic 3D holographic render, cinematic sci-fi lighting, Stark Industries CAD wireframe overlay, photorealistic textures, 8k resolution, volumetric neon glow: ${prompt}`;
 
     const response = await aiClient.models.generateImages({
-      model: "gemini-3.1-flash-lite-image",
+      model: "imagen-3.0-generate-002",
       prompt: enhancedPrompt,
       config: {
         numberOfImages: 1,
