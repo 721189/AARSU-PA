@@ -155,23 +155,30 @@ app.post("/api/chat", requireAuth, async (req, res) => {
       });
     }
     
-    // 2. Fetch User Context from Workspace (if token available)
+    // 2. Fetch User Context from Workspace (if token available) with Redis Caching
     let workspaceContext = "";
     if (token) {
-      const auth = getOAuth2Client(token);
-      try {
-        const calendar = google.calendar({ version: "v3", auth });
-        const events = await calendar.events.list({
-          calendarId: 'primary',
-          timeMin: (new Date()).toISOString(),
-          maxResults: 3,
-          singleEvents: true,
-          orderBy: 'startTime',
-        });
-        const nextEvents = events.data.items?.map(e => `${e.summary} at ${e.start?.dateTime}`).join(", ");
-        workspaceContext = `User's upcoming events: ${nextEvents || "None"}.`;
-      } catch (err) {
-        console.error("Workspace access error (soft fail):", err);
+      const cacheKey = `calendar:${token.slice(0, 16)}`;
+      const cachedCalendar = redisCache.get<string>(cacheKey);
+      if (cachedCalendar) {
+        workspaceContext = cachedCalendar;
+      } else {
+        const auth = getOAuth2Client(token);
+        try {
+          const calendar = google.calendar({ version: "v3", auth });
+          const events = await calendar.events.list({
+            calendarId: 'primary',
+            timeMin: (new Date()).toISOString(),
+            maxResults: 3,
+            singleEvents: true,
+            orderBy: 'startTime',
+          });
+          const nextEvents = events.data.items?.map(e => `${e.summary} at ${e.start?.dateTime}`).join(", ");
+          workspaceContext = `User's upcoming events: ${nextEvents || "None"}.`;
+          redisCache.set(cacheKey, workspaceContext, 60); // Cache for 60 seconds
+        } catch (err) {
+          console.error("Workspace access error (soft fail):", err);
+        }
       }
     }
 
