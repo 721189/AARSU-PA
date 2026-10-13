@@ -10,6 +10,9 @@ import { requireAuth } from "./src/server/auth";
 import { startBackupCron } from "./src/server/backup";
 import { IronLegionOrchestrator } from "./src/server/agentOrchestrator";
 import { jarvisGraph } from "./src/lib/knowledgeGraph";
+import { redisCache } from "./src/server/redisCache";
+import { dbService } from "./src/server/dbService";
+import { predictiveDaemon } from "./src/server/predictiveDaemon";
 
 // --- Enterprise Security Setup ---
 const app = express();
@@ -601,7 +604,87 @@ app.get("/api/jarvis/graph", requireAuth, (req, res) => {
   }
 });
 
+// --- Enterprise Redis Cache Metrics Endpoint ---
+app.get("/api/jarvis/redis/metrics", requireAuth, (req, res) => {
+  res.json(redisCache.getMetrics());
+});
+
+// --- Proactive Predictive Telemetry Feed Endpoint ---
+app.get("/api/jarvis/proactive/feed", requireAuth, (req, res) => {
+  res.json({
+    alerts: predictiveDaemon.getRecentAlerts(),
+    biometrics: dbService.getLatestBiometrics()
+  });
+});
+
+// --- Biometric Telemetry Sync Endpoint ---
+app.get("/api/jarvis/biometrics", requireAuth, (req, res) => {
+  res.json(dbService.getLatestBiometrics());
+});
+
+app.post("/api/jarvis/biometrics", requireAuth, async (req, res) => {
+  const { heartRate, stressIndex, focusLevel, coreTempC } = req.body;
+  const bio = {
+    heartRate: Number(heartRate) || 72,
+    stressIndex: Number(stressIndex) || 20,
+    focusLevel: Number(focusLevel) || 90,
+    coreTempC: Number(coreTempC) || 36.8,
+    timestamp: new Date().toISOString()
+  };
+  await dbService.recordBiometrics(bio);
+  res.json({ status: "recorded", data: bio });
+});
+
+// --- Continuous Multimodal Environmental Vision Analysis Endpoint ---
+app.post("/api/jarvis/vision/analyze", requireAuth, async (req, res) => {
+  try {
+    const { imageBase64, query } = req.body;
+    if (!imageBase64) return res.status(400).json({ error: "Image base64 required" });
+
+    let aiClient: GoogleGenAI;
+    try {
+      aiClient = getAI();
+    } catch {
+      return res.status(500).json({ error: "Neural core credentials missing" });
+    }
+
+    const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+    const prompt = query || "Provide an instantaneous tactical SITREP of what you observe in this video frame or screen view, Sir. Detect key objects, text, code, or user state.";
+
+    const response = await aiClient.models.generateContent({
+      model: "gemini-3.8-flash",
+      contents: [
+        {
+          inlineData: {
+            mimeType: "image/jpeg",
+            data: cleanBase64
+          }
+        },
+        { text: prompt }
+      ],
+      config: {
+        systemInstruction: "You are J.A.R.V.I.S. Provide razor-sharp, cinematic visual telemetry analysis. Address the user as 'Sir'."
+      }
+    });
+
+    res.json({
+      sitrep: response.text || "Visual telemetry acquired, Sir.",
+      timestamp: new Date().toISOString()
+    });
+  } catch (err: any) {
+    console.error("Vision Analysis Error:", err);
+    res.status(500).json({ error: "Visual telemetry processing glitch" });
+  }
+});
+
 async function startServer() {
+  // Start background proactive daemon
+  try {
+    const aiClient = getAI();
+    predictiveDaemon.setAIClient(aiClient);
+  } catch {}
+  predictiveDaemon.start();
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true, hmr: false },
