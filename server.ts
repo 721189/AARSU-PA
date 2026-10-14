@@ -33,6 +33,9 @@ import {
   STREAM_EMOTION_INSTRUCTION,
   type StreamEmotion,
 } from "./src/server/voice/emotionTag";
+import { ToolRegistry } from "./src/server/tools/registry";
+import { runToolLoop } from "./src/server/tools/toolLoop";
+import { createGeminiModelCaller } from "./src/server/tools/geminiCaller";
 
 // --- Enterprise Security Setup ---
 const app = express();
@@ -1173,6 +1176,95 @@ app.post("/api/voice/converse/stream", requireAuth, asyncHandler(async (req, res
   } finally {
     res.end();
   }
+}));
+
+// ============================================================================
+// Agency API
+//
+// Phase 2 of the build plan: the conversational model can now *act*. Destructive
+// tools are never executed without explicit approval — a request that would need
+// confirmation returns `pendingConfirmations`, and the client re-issues with
+// `approvedTools` once the user agrees.
+// ============================================================================
+
+// List the registered tools and which of them require confirmation.
+app.get("/api/agent/tools", requireAuth, (req, res) => {
+  const registry = new ToolRegistry({ ai: null, workspaceRoot: process.cwd() });
+  res.json({
+    tools: registry.list().map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      destructive: Boolean(tool.destructive),
+      parameters: tool.parameters,
+    })),
+    destructiveTools: registry.destructiveToolNames(),
+  });
+});
+
+// Run an objective through the tool loop.
+app.post("/api/agent/act", requireAuth, asyncHandler(async (req, res) => {
+  const {
+    objective,
+    dryRun = false,
+    approvedTools = [],
+    persona: personaId,
+  } = req.body ?? {};
+
+  if (!objective || typeof objective !== 'string') {
+    return res.status(400).json({ error: 'objective is required', code: 'bad_request' });
+  }
+
+  const aiClient = getAI();
+  const persona = resolvePersona(personaId);
+  const registry = new ToolRegistry({ ai: aiClient, workspaceRoot: process.cwd() });
+
+  const approved = new Set<string>(Array.isArray(approvedTools) ? approvedTools : []);
+  const pendingConfirmations: Array<{ name: string; args: Record<string, unknown>; reason: string }> = [];
+
+  const result = await runToolLoop({
+    objective,
+    systemInstruction:
+      `${persona.systemInstruction}\n\n` +
+      'You have tools available. Call them whenever they would produce a more accurate or more useful answer ' +
+      'than reasoning alone. Prefer tools over guessing. When a tool reports failure, say so plainly rather ' +
+      'than inventing a result. When the task is complete, reply in plain prose.',
+    callModel: createGeminiModelCaller(aiClient),
+    registry,
+    context: {
+      userId: req.user?.uid,
+      workspaceRoot: process.cwd(),
+      dryRun: Boolean(dryRun),
+    },
+    requestConfirmation: async (call) => {
+      if (approved.has(call.name)) return true;
+      pendingConfirmations.push({
+        name: call.name,
+        args: call.args,
+        reason: `"${call.name}" changes state and needs your approval.`,
+      });
+      return false;
+    },
+  });
+
+  res.json({
+    objective,
+    persona: persona.id,
+    finalText: result.finalText,
+    iterations: result.iterations,
+    stopReason: result.stopReason,
+    dryRun: Boolean(dryRun),
+    steps: result.steps.map((step) => ({
+      tool: step.call.name,
+      args: step.call.args,
+      ok: step.result?.ok ?? false,
+      summary: step.result?.summary ?? step.skippedReason ?? 'skipped',
+      confirmed: step.confirmed ?? null,
+      skippedReason: step.skippedReason ?? null,
+      durationMs: step.durationMs,
+    })),
+    pendingConfirmations,
+    timestamp: new Date().toISOString(),
+  });
 }));
 
 // --- Unknown API route handler ---
