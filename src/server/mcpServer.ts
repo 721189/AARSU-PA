@@ -1,4 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
+import { MODELS } from './models';
 import { iotBridge } from './iotBridge';
 import { jarvisGraph } from '../lib/knowledgeGraph';
 import { redisCache } from './redisCache';
@@ -118,7 +119,7 @@ export class JarvisMcpServer {
       if (name === 'google_search_grounding') {
         if (!this.ai) throw new Error("AI core unavailable");
         const response = await this.ai.models.generateContent({
-          model: "gemini-3.8-flash",
+          model: MODELS.chat,
           contents: args.query,
           config: {
             systemInstruction: "You are J.A.R.V.I.S. Provide concise, high-IQ intelligence backed by Google Search Grounding. Address user as 'Sir'.",
@@ -131,7 +132,7 @@ export class JarvisMcpServer {
       if (name === 'python_code_execution') {
         if (!this.ai) throw new Error("AI core unavailable");
         const response = await this.ai.models.generateContent({
-          model: "gemini-3.8-flash",
+          model: MODELS.chat,
           contents: args.prompt,
           config: {
             systemInstruction: "You are J.A.R.V.I.S. Execute Python calculations with codeExecution. Address user as 'Sir'.",

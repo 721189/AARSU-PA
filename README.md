@@ -1,145 +1,160 @@
-# 🌟 Aarsu: Enterprise Cognitive Agent & J.A.R.V.I.S. Command Core
+# Aarsu — J.A.R.V.I.S. Command Core
 
-[![AI Studio Build](https://img.shields.io/badge/Engine-Google%20Gemini%203.5%20%2F%203.8-blueviolet?style=for-the-badge&logo=google)](https://aistudio.google.com)
-[![Architecture](https://img.shields.io/badge/Architecture-MCP%20Hub%20%2B%20Reinforcement%20Learning-blue?style=for-the-badge)](https://modelcontextprotocol.io)
-[![Security](https://img.shields.io/badge/Security-Firebase%20Auth%20%2B%20OAuth%202.0-green?style=for-the-badge&logo=firebase)](https://firebase.google.com)
-[![Build Status](https://img.shields.io/badge/Build-Passing%20(Vite%20%2B%20TypeScript)-success?style=for-the-badge)](https://vitejs.dev)
+A holographic 3D assistant interface with a Gemini-powered conversational core.
 
----
-
-## 🧭 Executive Summary
-
-**Aarsu** is an enterprise-grade, highly autonomous cognitive operating system and J.A.R.V.I.S. command core designed to synchronize human intent with multi-agent orchestration, proactive task scheduling, Model Context Protocol (MCP) integrations, reinforcement learning feedback loops, and hands-free voice execution. 
-
-Built with **Google Gemini 3.5 / 3.8 Flash** and **Imagen 3.0**, Aarsu delivers real-time spatial computing, biometric HUD overlays, secure Firebase authentication, Google Workspace sync, and an immutable knowledge graph.
+> **This README describes what the code actually does today.** The previous version
+> advertised systems that did not exist (PostgreSQL, Redis, an immutable knowledge
+> graph, a real MCP hub, automated backups). If you are looking for the gap between
+> this app and a real J.A.R.V.I.S., read
+> [`docs/JARVIS_AUDIT.md`](docs/JARVIS_AUDIT.md) and the roadmap in
+> [`docs/JARVIS_BUILD_PLAN.md`](docs/JARVIS_BUILD_PLAN.md).
 
 ---
 
-## 📊 System Architecture & Data Flow
+## What this is
 
-```mermaid
-graph TD
-    subgraph Client Tier [Spatial UI & Voice Engine]
-        UI[React + Tailwind HUD] --> Hotkey[Global Hotkey Engine (Ctrl+Space)]
-        Hotkey --> STT[Continuous Web Speech STT]
-        STT --> Audio[Jarvis Audio Synthesizer]
-    end
+A single-page React 19 + Vite app with an Express backend. It layers a JARVIS-style
+HUD (3D arc reactor, holographic panels, lip-sync visemes, telemetry) over a Gemini
+chat bot with Google Search/Maps grounding, code execution, and read access to
+Google Workspace.
 
-    subgraph Gateway Tier [Express Enterprise Gateway]
-        Gateway[Express Server.ts] --> Auth[Firebase Token & OAuth Verifier]
-        Gateway --> Rate[Rate Limiter & Helmet Security]
-    end
+## Status at a glance
 
-    subgraph Intelligence Core [Google GenAI SDK]
-        Auth --> Gemini[Gemini 3.5 / 3.8 Flash]
-        Auth --> Imagen[Imagen 3.0 Visual Synthesizer]
-        Gemini --> MCP[MCP Hub (GitHub, Slack, Filesystem)]
-        Gemini --> RL[Reinforcement Learning Feedback Loop]
-    end
+| Area | State |
+|---|---|
+| Build, type-check, tests | ✅ green (`npm run lint`, `npm test`, `npm run build`) |
+| Gemini chat, grounding, code execution | ✅ real |
+| Google Workspace (Calendar/Drive/Gmail) | ✅ real, via a client-supplied OAuth token (see Security) |
+| 3D HUD, WebAudio cues, webcam vision for chat | ✅ real |
+| Voice input/output | ⚠️ browser `speechSynthesis` / `webkitSpeechRecognition` — not the Gemini Live API |
+| Wake word | ⚠️ substring match on the transcript, not a wake-word engine |
+| IoT devices, biometrics, D3 telemetry chart, knowledge graph, "reinforcement learning" | ⚠️ **simulated** — in-process mock data, labelled as such in the UI where possible |
+| MCP hub | ⚠️ a REST façade shaped like MCP; not the Model Context Protocol |
+| Multi-agent "Iron Legion" | ⚠️ three parallel Gemini prompts with a real retry, no planner/verifier |
+| Proactive daemon | ⚠️ interval loop over mock telemetry |
 
-    subgraph Persistence & Sync Tier
-        Gemini --> DB[(PostgreSQL / Cloud SQL + Firestore)]
-        Gemini --> Graph[Knowledge Graph & Redis Cache]
-        Gemini --> Daemon[Proactive Calendar & Email Daemon]
-    end
-```
-
----
-
-## 📈 Infographic: Core Capabilities Matrix
+## Architecture
 
 ```
-+-------------------------------------------------------------------------------------------------+
-|                                 AARSU COGNITIVE ENGINE V3.0                                     |
-+---------------------------------+-------------------------------+-------------------------------+
-| 🎙️ Hands-Free Voice Control     | 🧠 Reinforcement Learning     | 🔌 Modular MCP Hub            |
-| • Global Hotkey (Ctrl + Space)  | • Policy Reward Optimization  | • GitHub, Slack, Filesystem   |
-| • Always-on STT & Wake Word     | • User Feedback Reward Tuning | • Enterprise Connection Mgr   |
-| • Jarvis Arc Pulse Audio FX     | • Automated Agent Adaptation  | • Secure Sandbox Isolation    |
-+---------------------------------+-------------------------------+-------------------------------+
-| 📅 Proactive Daemon             | 🛡️ Enterprise Security       | 🖼️ Real-Time 3D Vision        |
-| • Calendar & Email Parsing      | • Firebase Auth + ID Tokens   | • Imagen 3.0 Photo Generation |
-| • Pre-Meeting Brief Generator   | • RBAC & Encrypted Vault      | • Spatial HUD Holographic UI  |
-| • Autonomous Task Scheduling    | • OAuth 2.0 Google Workspace  | • Multi-Modal Embeddings      |
-+---------------------------------+-------------------------------+-------------------------------+
+Browser (React 19 SPA)
+  App.tsx ─ AarsuAvatar (portrait + visemes) · JarvisHud (3D core, 10 tabs)
+  ChatInterface.tsx ─ chat, voice presets, VisionManager (real webcam)
+  lib/ ─ firebase (auth + 401 retry), memory (embeddings), audioEngine, duplexVoice
+
+Express server.ts
+  Gemini proxy   /api/chat /api/embed /api/jarvis/{search,code,maps,swarm,vision/analyze,...}
+  Workspace      /api/proactive
+  In-memory      redisCache, dbService, iotBridge, knowledgeGraph, predictiveDaemon
 ```
 
----
+## Quick start
 
-## 📋 Feature Comparison Table
+```bash
+git clone https://github.com/721189/AARSU-PA.git
+cd AARSU-PA
+npm install
+cp .env.example .env        # then set GEMINI_API_KEY
+npm run dev                 # http://localhost:3000
+```
 
-| Feature Capability | Traditional Assistants | Aarsu Cognitive Core (J.A.R.V.I.S.) |
-| :--- | :--- | :--- |
-| **Trigger Mechanism** | Manual mouse click / button tap | Global Hotkey (`Ctrl + Space`) & Wake Word detection |
-| **Model Backend** | Static prompts, single-turn | Multi-model Gemini 3.5/3.8 Flash with automatic fallback |
-| **Context Integration** | Isolated local history | Immutable Knowledge Graph & Redis Caching |
-| **Proactive Intelligence** | Reactive query-response | Autonomous daemon scanning calendar & emails for prep |
-| **External Integrations** | Hardcoded API keys | Model Context Protocol (MCP) modular bridge |
-| **Voice Feedback** | Standard browser speech | Spatial arc pulse audio & emotional viseme synchronization |
-| **Security & Auth** | Basic session cookies | Firebase ID tokens + Google Workspace OAuth 2.0 |
+### Environment
 
----
+| Variable | Required | Purpose |
+|---|---|---|
+| `GEMINI_API_KEY` | yes | All Gemini calls |
+| `PORT` | no | Defaults to `3000` |
+| `APP_URL` | no | Self-referential links / OAuth callbacks |
+| `VITE_OAUTH_CLIENT_ID` | no | Google Workspace OAuth (falls back to `firebase-applet-config.json`) |
 
-## 🛠️ Technical Stack
+### Scripts
 
-- **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Lucide Icons, Canvas 3D Particle HUD.
-- **Backend**: Node.js, Express, TypeScript, `@google/genai` (Gemini 3.5/3.8 Flash, Imagen 3.0).
-- **Security**: Helmet, Express Rate Limit, Firebase Authentication, OAuth 2.0 Bearer tokens.
-- **Intelligence**: Reinforcement learning feedback loop, MCP connector daemons, Knowledge Graph vector embeddings.
+| Command | Description |
+|---|---|
+| `npm run dev` | Dev server with Vite middleware |
+| `npm run build` | Build the SPA and bundle the server to `dist/server.cjs` |
+| `npm start` | Run the production bundle |
+| `npm run lint` | `tsc --noEmit` |
+| `npm test` | Unit + API contract tests (Vitest) |
 
----
+## Health
 
-## 🔌 Model Context Protocol (MCP) Hub
+`GET /api/health` reports per-dependency status rather than a bare `"ok"`, and
+returns **503** when something is down:
 
-Aarsu implements a robust MCP architecture allowing seamless connection to external developer tools and data silos:
+```json
+{
+  "status": "ok",
+  "checks": {
+    "gemini":        { "status": "ok", "detail": "chat=gemini-3.8-flash" },
+    "firebaseAdmin": { "status": "ok" },
+    "cache":         { "status": "ok", "detail": "0 keys" }
+  },
+  "uptimeSeconds": 12
+}
+```
 
-1. **GitHub MCP**: Autonomous repository inspection, issue tracking, and PR summarization.
-2. **Slack MCP**: Real-time channel message parsing, triage, and automated replies.
-3. **Local Filesystem MCP**: Secure directory indexing, code search, and file manipulation.
+## API
 
----
+All routes except `/api/health` require `Authorization: Bearer <firebase-id-token>`.
 
-## 🚀 Quick Start & Installation
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/health` | Per-dependency health (no auth) |
+| `POST` | `/api/chat` | Conversational reply with emotion tag |
+| `POST` | `/api/embed` | Text embedding (`gemini-embedding-001`) |
+| `POST` | `/api/proactive` | Calendar/Drive/Gmail proactive suggestions |
+| `POST` | `/api/jarvis/search` | Google Search grounding with citations |
+| `POST` | `/api/jarvis/maps` | Google Maps grounding |
+| `POST` | `/api/jarvis/code` | Sandboxed code execution |
+| `POST` | `/api/jarvis/swarm` | Iron Legion multi-agent sweep |
+| `POST` | `/api/jarvis/vision/analyze` | Multimodal image analysis |
+| `POST` | `/api/jarvis/generate-3d-image` | Image generation |
+| `POST` | `/api/agent/run` | Structured autonomous task run |
+| `GET` | `/api/jarvis/graph` | Associative knowledge graph (in-memory) |
+| `GET`/`POST` | `/api/jarvis/iot/*` | Simulated facility devices |
+| `GET`/`POST` | `/api/jarvis/biometrics` | Simulated biometric telemetry |
+| `GET` | `/api/jarvis/host/diagnostics` | Real host OS telemetry |
+| `GET`/`POST` | `/api/mcp/*` | MCP-shaped tool + resource façade |
 
-1. **Clone and Install Dependencies**:
-   ```bash
-   git clone https://github.com/aarsu/aarsu-cognitive-core.git
-   cd aarsu-cognitive-core
-   npm install
-   ```
+## Models
 
-2. **Configure Environment Variables**:
-   Create a `.env` file in the root directory:
-   ```env
-   GEMINI_API_KEY=your_google_genai_api_key_here
-   PORT=3000
-   ```
+All model IDs live in [`src/server/models.ts`](src/server/models.ts) — the single
+source of truth. Do not inline model IDs.
 
-3. **Run Development Server**:
-   ```bash
-   npm run dev
-   ```
+| Purpose | Model |
+|---|---|
+| Chat | `gemini-3.8-flash` (fallbacks: `gemini-3.6-flash`, `gemini-3.5-flash`) |
+| Fast tier / sub-agents | `gemini-3.6-flash` |
+| Embeddings | `gemini-embedding-001` |
+| Image generation | `imagen-4.0-generate-001` |
 
-4. **Production Build**:
-   ```bash
-   npm run build
-   npm start
-   ```
+## Security notes (known gaps)
 
----
+- The Google Workspace OAuth access token is currently sent in the request **body**
+  for `/api/chat` and `/api/proactive`. Moving this server-side is Phase 6 of the plan.
+- CORS is currently unrestricted and CSP is disabled for local Vite HMR.
+- `firebase-applet-config.json` contains client-side Firebase credentials (expected to
+  be public for a web app, but they should be injected via env rather than committed).
 
-## 📜 API Endpoints Reference
+## Testing
 
-| Endpoint | Method | Description |
-| :--- | :--- | :--- |
-| `/api/health` | `GET` | System health check and uptime monitor |
-| `/api/chat` | `POST` | Primary cognitive generation with Gemini 3.5/3.8 flash |
-| `/api/image/generate` | `POST` | High-fidelity 3D realistic image generation via Imagen 3.0 |
-| `/api/mcp/connect` | `POST` | Establish MCP bridge to GitHub, Slack, or Filesystem |
-| `/api/reinforcement/reward` | `POST` | Submit reward feedback for reinforcement learning loop |
+```bash
+npm test          # 34 tests: model registry, error mapping, API contract
+npm run lint      # type-check
+```
 
----
+`tests/api.contract.test.ts` boots the real Express app on an ephemeral port and
+asserts auth gating and honest status codes across 17 protected routes.
 
-## 📄 License
+CI is defined in [`docs/ci.github-actions.yml`](docs/ci.github-actions.yml); move it to
+`.github/workflows/ci.yml` to activate it (the automation identity used for the initial
+commit lacked `workflows` permission).
 
-Licensed under the MIT License. Built with ❤️ for enterprise cognitive excellence.
+## Roadmap
+
+See [`docs/JARVIS_BUILD_PLAN.md`](docs/JARVIS_BUILD_PLAN.md). Phase 0 (stabilise and
+tell the truth) is complete.
+
+## License
+
+MIT.

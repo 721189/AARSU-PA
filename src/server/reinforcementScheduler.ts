@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { google } from 'googleapis';
+import { MODELS } from './models';
 
 export interface ProactiveTaskSuggestion {
   id: string;
@@ -113,7 +114,7 @@ export class ReinforcementScheduler {
         `;
 
         const response = await this.ai.models.generateContent({
-          model: 'gemini-3.8-flash',
+          model: MODELS.chat,
           contents: prompt,
           config: {
             systemInstruction: "You are JARVIS proactive reasoning engine. Provide precise, executive-level proactive scheduling insights.",

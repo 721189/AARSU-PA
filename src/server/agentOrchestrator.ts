@@ -1,11 +1,19 @@
 import { GoogleGenAI } from "@google/genai";
+import { MODELS } from "./models";
 
 export interface AgentTaskReport {
   agentName: 'Sentinel' | 'Architect' | 'Tactician';
-  status: 'passed' | 'warning' | 'repaired';
+  /**
+   * 'passed'  — the agent produced real model output.
+   * 'retried' — the first attempt failed and a real retry succeeded.
+   * 'failed'  — the agent could not complete; `error` explains why.
+   * There is no longer a fabricated 'passed' on failure.
+   */
+  status: 'passed' | 'retried' | 'failed';
   objective: string;
   findings: string[];
-  correctiveActionTaken?: string;
+  error?: string;
+  attempts: number;
   executionTimeMs: number;
 }
 
@@ -13,7 +21,10 @@ export interface SwarmExecutionResult {
   missionId: string;
   objective: string;
   reports: AgentTaskReport[];
+  /** True when at least one sub-agent genuinely failed and was retried. */
   selfHealingTriggered: boolean;
+  /** True when the swarm completed with every sub-agent reporting real output. */
+  allAgentsSucceeded: boolean;
   synthesizedConclusion: string;
   totalTimeMs: number;
 }
@@ -37,18 +48,9 @@ export class IronLegionOrchestrator {
     ]);
 
     const reports = [sentinelReport, architectReport, tacticianReport];
-    const selfHealingNeeded = reports.some(r => r.status === 'warning');
-
-    let selfHealingTriggered = false;
-    if (selfHealingNeeded) {
-      selfHealingTriggered = true;
-      for (const report of reports) {
-        if (report.status === 'warning') {
-          report.status = 'repaired';
-          report.correctiveActionTaken = "Applied automated neural patch & verified parameter stability.";
-        }
-      }
-    }
+    // "Self-healing" now means a real retry actually happened, not a relabelled warning.
+    const selfHealingTriggered = reports.some(r => r.attempts > 1);
+    const allAgentsSucceeded = reports.every(r => r.status !== 'failed');
 
     // Synthesize Swarm Findings dynamically with Gemini
     let synthesizedConclusion = "";
@@ -60,15 +62,19 @@ export class IronLegionOrchestrator {
 Provide a crisp, authoritative, 2-3 sentence JARVIS tactical mission conclusion addressing 'Sir'.`;
 
       const synthRes = await this.ai.models.generateContent({
-        model: "gemini-3.8-flash",
+        model: MODELS.chat,
         contents: synthPrompt,
         config: {
           systemInstruction: "You are J.A.R.V.I.S. Synthesize Iron Legion multi-agent mission reports with crisp military precision and wit. Refer to user as 'Sir'."
         }
       });
-      synthesizedConclusion = synthRes.text || `Iron Legion concluded mission: "${objective}". All defensive, architectural, and tactical parameters verified green, Sir.`;
-    } catch {
-      synthesizedConclusion = `Iron Legion successfully concluded assessment of: "${objective}". Sentinel, Architect, and Tactician sub-agents verified system integrity with zero critical vulnerabilities. All protocols operating in nominal parameters, Sir.`;
+      synthesizedConclusion = synthRes.text || "";
+    } catch (err) {
+      // Honest degradation: say the synthesis step failed rather than inventing a
+      // triumphant all-green conclusion.
+      synthesizedConclusion =
+        `Iron Legion completed the sub-agent sweep for "${objective}", but the synthesis step was unavailable ` +
+        `(${(err as Error)?.message ?? 'unknown error'}). Raw sub-agent findings are reported above.`;
     }
 
     return {
@@ -76,95 +82,87 @@ Provide a crisp, authoritative, 2-3 sentence JARVIS tactical mission conclusion 
       objective,
       reports,
       selfHealingTriggered,
+      allAgentsSucceeded,
       synthesizedConclusion,
       totalTimeMs: Date.now() - startTime
     };
   }
 
-  private async runSentinelAgent(objective: string): Promise<AgentTaskReport> {
+  /**
+   * Runs one sub-agent with a genuine single retry. On failure the report is
+   * marked 'failed' with the underlying error — never a fabricated 'passed'.
+   */
+  private async runSubAgent(
+    agentName: AgentTaskReport['agentName'],
+    objectiveLabel: string,
+    contents: string,
+    systemInstruction: string
+  ): Promise<AgentTaskReport> {
     const start = Date.now();
-    try {
-      const response = await this.ai.models.generateContent({
-        model: "gemini-3.1-flash-lite",
-        contents: `Sentinel Agent: Audit security, token sanitization, and runtime integrity for: ${objective}`,
-        config: {
-          systemInstruction: "You are the Sentinel Sub-Agent in J.A.R.V.I.S.'s Iron Legion. Report on security parameters, token safety, and defensive protocols. Return 3 bullet-point findings."
+    let attempts = 0;
+    let lastError: unknown = null;
+
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      attempts = attempt;
+      try {
+        const response = await this.ai.models.generateContent({
+          model: MODELS.fast,
+          contents,
+          config: { systemInstruction }
+        });
+        const lines = (response.text || "").split("\n").filter(l => l.trim().length > 0).slice(0, 3);
+        if (lines.length === 0) {
+          throw new Error('Sub-agent returned an empty response.');
         }
-      });
-      const lines = (response.text || "").split("\n").filter(l => l.trim().length > 0).slice(0, 3);
-      return {
-        agentName: 'Sentinel',
-        status: 'passed',
-        objective: 'Security & Integrity Perimeter Scan',
-        findings: lines.length > 0 ? lines : ['Bearer authorization verified', 'CORS & Helmet headers active', 'No plain-text tokens detected in memory'],
-        executionTimeMs: Date.now() - start
-      };
-    } catch {
-      return {
-        agentName: 'Sentinel',
-        status: 'passed',
-        objective: 'Security & Integrity Perimeter Scan',
-        findings: ['Bearer authorization verified', 'CORS & Helmet headers active', 'Rate limiting guard operational'],
-        executionTimeMs: Date.now() - start
-      };
+        return {
+          agentName,
+          status: attempt === 1 ? 'passed' : 'retried',
+          objective: objectiveLabel,
+          findings: lines,
+          attempts,
+          executionTimeMs: Date.now() - start
+        };
+      } catch (err) {
+        lastError = err;
+        console.warn(`[Iron Legion] ${agentName} attempt ${attempt} failed: ${(err as Error)?.message ?? err}`);
+      }
     }
+
+    return {
+      agentName,
+      status: 'failed',
+      objective: objectiveLabel,
+      findings: [],
+      error: (lastError as Error)?.message ?? String(lastError),
+      attempts,
+      executionTimeMs: Date.now() - start
+    };
   }
 
-  private async runArchitectAgent(objective: string): Promise<AgentTaskReport> {
-    const start = Date.now();
-    try {
-      const response = await this.ai.models.generateContent({
-        model: "gemini-3.1-flash-lite",
-        contents: `Architect Agent: Analyze architectural design, modularity, and resource efficiency for: ${objective}`,
-        config: {
-          systemInstruction: "You are the Architect Sub-Agent in J.A.R.V.I.S.'s Iron Legion. Report on code modularity, state flow, and optimization. Return 3 bullet-point findings."
-        }
-      });
-      const lines = (response.text || "").split("\n").filter(l => l.trim().length > 0).slice(0, 3);
-      return {
-        agentName: 'Architect',
-        status: 'passed',
-        objective: 'Code Architecture & Scalability Audit',
-        findings: lines.length > 0 ? lines : ['Modular component hierarchy intact', 'Asynchronous queues running without blockages', 'Garbage collection footprint within limits'],
-        executionTimeMs: Date.now() - start
-      };
-    } catch {
-      return {
-        agentName: 'Architect',
-        status: 'passed',
-        objective: 'Code Architecture & Scalability Audit',
-        findings: ['Modular component hierarchy intact', 'Vite/Express bundle sizes optimized', 'Memory allocation nominal'],
-        executionTimeMs: Date.now() - start
-      };
-    }
+  private runSentinelAgent(objective: string): Promise<AgentTaskReport> {
+    return this.runSubAgent(
+      'Sentinel',
+      'Security & Integrity Perimeter Scan',
+      `Sentinel Agent: Audit security, token sanitization, and runtime integrity for: ${objective}`,
+      "You are the Sentinel Sub-Agent in J.A.R.V.I.S.'s Iron Legion. Report on security parameters, token safety, and defensive protocols. Return 3 bullet-point findings."
+    );
   }
 
-  private async runTacticianAgent(objective: string): Promise<AgentTaskReport> {
-    const start = Date.now();
-    try {
-      const response = await this.ai.models.generateContent({
-        model: "gemini-3.1-flash-lite",
-        contents: `Tactician Agent: Plan execution strategy, priority roadmap, and external tool integration for: ${objective}`,
-        config: {
-          systemInstruction: "You are the Tactician Sub-Agent in J.A.R.V.I.S.'s Iron Legion. Formulate tactical action plans and optimal next moves. Return 3 bullet-point findings."
-        }
-      });
-      const lines = (response.text || "").split("\n").filter(l => l.trim().length > 0).slice(0, 3);
-      return {
-        agentName: 'Tactician',
-        status: 'passed',
-        objective: 'Strategic Action & Tool Dispatch',
-        findings: lines.length > 0 ? lines : ['Google Search Grounding ready for live queries', 'Code Execution sandbox available', 'Action execution order mapped to user priority'],
-        executionTimeMs: Date.now() - start
-      };
-    } catch {
-      return {
-        agentName: 'Tactician',
-        status: 'passed',
-        objective: 'Strategic Action & Tool Dispatch',
-        findings: ['Google Search Grounding standing by', 'Python Code execution ready', 'Workspace sync primed'],
-        executionTimeMs: Date.now() - start
-      };
-    }
+  private runArchitectAgent(objective: string): Promise<AgentTaskReport> {
+    return this.runSubAgent(
+      'Architect',
+      'Code Architecture & Scalability Audit',
+      `Architect Agent: Analyze architectural design, modularity, and resource efficiency for: ${objective}`,
+      "You are the Architect Sub-Agent in J.A.R.V.I.S.'s Iron Legion. Report on code modularity, state flow, and optimization. Return 3 bullet-point findings."
+    );
+  }
+
+  private runTacticianAgent(objective: string): Promise<AgentTaskReport> {
+    return this.runSubAgent(
+      'Tactician',
+      'Strategic Action & Tool Dispatch',
+      `Tactician Agent: Plan execution strategy, priority roadmap, and external tool integration for: ${objective}`,
+      "You are the Tactician Sub-Agent in J.A.R.V.I.S.'s Iron Legion. Formulate tactical action plans and optimal next moves. Return 3 bullet-point findings."
+    );
   }
 }

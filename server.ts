@@ -16,11 +16,18 @@ import { predictiveDaemon } from "./src/server/predictiveDaemon";
 import { iotBridge } from "./src/server/iotBridge";
 import { mcpServer } from "./src/server/mcpServer";
 import { reinforcementScheduler } from "./src/server/reinforcementScheduler";
+import {
+  MODELS,
+  CHAT_MODEL_CANDIDATES,
+  isAuthError,
+  isModelUnavailableError,
+} from "./src/server/models";
+import { AppError, isAppError, notConfigured } from "./src/server/errors";
 
 // --- Enterprise Security Setup ---
 const app = express();
 app.set('trust proxy', 1);
-const PORT = 3000;
+const PORT = Number(process.env.PORT ?? 3000);
 
 // Security Middleware
 app.use(helmet({
@@ -37,14 +44,16 @@ const apiLimiter = rateLimit({
 });
 app.use("/api/", apiLimiter);
 
-// Start Automated Backups
-startBackupCron();
+// Start Automated Backups (skipped under test so no cron job is registered)
+if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
+  startBackupCron();
+}
 
 // --- API Client ---
 let ai: GoogleGenAI | null = null;
 function getAI() {
   const key = process.env.GEMINI_API_KEY;
-  if (!key) throw new Error("GEMINI_API_KEY is missing");
+  if (!key) throw notConfigured("GEMINI_API_KEY");
   if (!ai) {
     ai = new GoogleGenAI({
       apiKey: key,
@@ -68,20 +77,59 @@ function getOAuth2Client(token: string) {
 // --- Routes ---
 
 // Health Check
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+// Reports per-dependency status so a dead model, missing key or unreachable
+// datastore is visible instead of being hidden behind a fake success.
+app.get("/api/health", async (req, res) => {
+  const checks: Record<string, { status: 'ok' | 'degraded' | 'down'; detail?: string }> = {};
+
+  // 1. Gemini credentials
+  const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY);
+  checks.gemini = hasGeminiKey
+    ? { status: 'ok', detail: `chat=${MODELS.chat}` }
+    : { status: 'down', detail: 'GEMINI_API_KEY is not set' };
+
+  // 2. Firebase Admin (auth verification)
+  try {
+    const { getApps } = await import('firebase-admin/app');
+    checks.firebaseAdmin = getApps().length > 0
+      ? { status: 'ok' }
+      : { status: 'down', detail: 'firebase-admin not initialised' };
+  } catch (err) {
+    checks.firebaseAdmin = { status: 'down', detail: (err as Error).message };
+  }
+
+  // 3. Cache (in-process LRU standing in for Redis)
+  try {
+    const metrics = redisCache.getMetrics();
+    checks.cache = { status: 'ok', detail: `${metrics.totalKeys} keys` };
+  } catch (err) {
+    checks.cache = { status: 'down', detail: (err as Error).message };
+  }
+
+  const anyDown = Object.values(checks).some((c) => c.status === 'down');
+  const anyDegraded = Object.values(checks).some((c) => c.status === 'degraded');
+
+  res.status(anyDown ? 503 : 200).json({
+    status: anyDown ? 'down' : anyDegraded ? 'degraded' : 'ok',
+    checks,
+    uptimeSeconds: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // In-memory embedding cache to avoid redundant API calls and prevent rate limiting
 const embeddingCache = new Map<string, number[]>();
 
-// Helper function to robustly generate Gemini responses with automatic retry and model fallbacks
+// Helper function to robustly generate Gemini responses with automatic retry and model fallbacks.
+//
+// Honesty contract: this function either returns real model output, or throws an
+// AppError. It never fabricates a "plausible" reply, because doing so previously
+// hid shut-down models and misconfigured keys behind fake success.
 async function generateContentWithFallback(aiClient: GoogleGenAI, contents: any, systemInstruction: string): Promise<string> {
-  // Use valid, active models from @google/genai guidelines
-  const models = ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-2.5-flash"];
-  let lastError: any = null;
+  let lastError: unknown = null;
+  const attempted: string[] = [];
 
-  for (const model of models) {
+  for (const model of CHAT_MODEL_CANDIDATES) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const response = await aiClient.models.generateContent({
@@ -95,44 +143,39 @@ async function generateContentWithFallback(aiClient: GoogleGenAI, contents: any,
         if (response.text) {
           return response.text;
         }
+        lastError = new Error(`Model ${model} returned an empty response.`);
       } catch (err: any) {
         lastError = err;
-        const msg = (err?.message || String(err)).toLowerCase();
-        const isAuthError = msg.includes("401") || msg.includes("unauthenticated") || msg.includes("authentication") || msg.includes("invalid api key");
-        const isHighDemand = msg.includes("503") || msg.includes("high demand") || msg.includes("spikes in demand");
-        const isRateLimit = msg.includes("429") || msg.includes("resource_exhausted") || msg.includes("quota");
-        
-        console.warn(`[Gemini Fallback] Model ${model} attempt ${attempt + 1} notice: ${err?.message?.slice(0, 120) || 'Transient error'}`);
+        attempted.push(`${model}#${attempt + 1}`);
+        console.warn(`[Gemini] ${model} attempt ${attempt + 1} failed: ${err?.message?.slice(0, 160) || 'transient error'}`);
 
-        // If credentials are unauthorized (401), stop immediately without unnecessary loops
-        if (isAuthError) {
-          return JSON.stringify({
-            reply: "I'm having a little trouble connecting to my AI brain. Please make sure a valid Gemini API key is configured in the Settings > Secrets panel.",
-            emotion: "confusion"
+        // Bad credentials will never succeed by retrying or switching models.
+        if (isAuthError(err)) {
+          throw new AppError('not_configured', 'Gemini rejected the configured credentials.', {
+            detail: 'Check that GEMINI_API_KEY is valid and has access to the requested models.',
+            cause: err,
           });
         }
 
-        // If the model is experiencing high demand (503) or rate limit (429), switch immediately to next model in fallback list
-        if (isHighDemand || isRateLimit) {
-          break; // Switch to next model immediately without blocking
+        // Model unavailable / rate limited -> move to the next candidate immediately.
+        if (isModelUnavailableError(err)) {
+          break;
         }
 
-        // For other transient network glitches, try second attempt
+        // Other transient errors -> one retry against the same model.
         if (attempt === 0) {
           await new Promise(resolve => setTimeout(resolve, 300));
           continue;
         }
 
-        break; // Try next model
+        break;
       }
     }
   }
 
-  // Graceful fallback response if all models are experiencing temporary traffic spikes
-  console.warn("[Gemini Fallback] All Gemini models momentarily busy, providing empathetic response.");
-  return JSON.stringify({
-    reply: "I'm right here with you! The AI network is experiencing a momentary spike in traffic, but I'm ready to keep chatting. Could you ask me that again in just a couple seconds?",
-    emotion: "empathy"
+  throw new AppError('upstream_unavailable', 'All Gemini models are currently unavailable.', {
+    detail: { attempted, lastError: (lastError as Error)?.message ?? String(lastError) },
+    cause: lastError,
   });
 }
 
@@ -149,9 +192,12 @@ app.post("/api/chat", requireAuth, async (req, res) => {
     try {
       aiClient = getAI();
     } catch (authErr: any) {
-      return res.json({
-        reply: "I'm unable to connect to the Gemini API right now. Please ensure your Gemini API key is configured in the Settings > Secrets panel.",
-        emotion: "confusion"
+      // Honest failure: the key is missing, so this is a 503 — not a 200 with a
+      // friendly message pretending the assistant replied.
+      return res.status(503).json({
+        error: "Gemini is not configured on this server.",
+        code: "not_configured",
+        detail: "Set GEMINI_API_KEY to enable chat.",
       });
     }
     
@@ -353,7 +399,7 @@ app.post("/api/embed", requireAuth, async (req, res) => {
 
     try {
       const response = await aiClient.models.embedContent({
-        model: 'text-embedding-004',
+        model: MODELS.embedding,
         contents: trimmed,
       });
       embedding = response.embeddings?.[0]?.values || [];
@@ -462,7 +508,7 @@ app.post("/api/jarvis/search", requireAuth, async (req, res) => {
 
     try {
       const response = await aiClient.models.generateContent({
-        model: "gemini-3.8-flash",
+        model: MODELS.chat,
         contents: query,
         config: {
           systemInstruction: "You are J.A.R.V.I.S., Tony Stark's sophisticated artificial intelligence. Provide concise, tactical, high-IQ intelligence powered by live Google Search grounding. Refer to the user as 'Sir'. Keep it articulate, witty, and razor-sharp.",
@@ -507,7 +553,7 @@ app.post("/api/jarvis/search", requireAuth, async (req, res) => {
   }
 });
 
-// --- Google Maps Grounding Endpoint (gemini-3.5-flash with googleMaps tool) ---
+// --- Google Maps Grounding Endpoint (googleMaps tool) ---
 app.post("/api/jarvis/maps", requireAuth, async (req, res) => {
   try {
     const { query, userLocation } = req.body;
@@ -521,7 +567,7 @@ app.post("/api/jarvis/maps", requireAuth, async (req, res) => {
     }
 
     const response = await aiClient.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: MODELS.chat,
       contents: query,
       config: {
         systemInstruction: "You are J.A.R.V.I.S. Provide precise geographical positioning, navigation, local business intel, and mapping intelligence using Google Maps grounding. Address user as 'Sir'.",
@@ -541,7 +587,7 @@ app.post("/api/jarvis/maps", requireAuth, async (req, res) => {
   }
 });
 
-// --- Realistic 3D Hologram & Image Generation Endpoint (gemini-3.1-flash-lite-image) ---
+// --- Realistic 3D Hologram & Image Generation Endpoint ---
 app.post("/api/jarvis/generate-3d-image", requireAuth, async (req, res) => {
   try {
     const { prompt } = req.body;
@@ -557,7 +603,7 @@ app.post("/api/jarvis/generate-3d-image", requireAuth, async (req, res) => {
     const enhancedPrompt = `Ultra-realistic 3D holographic render, cinematic sci-fi lighting, Stark Industries CAD wireframe overlay, photorealistic textures, 8k resolution, volumetric neon glow: ${prompt}`;
 
     const response = await aiClient.models.generateImages({
-      model: "imagen-3.0-generate-002",
+      model: MODELS.image,
       prompt: enhancedPrompt,
       config: {
         numberOfImages: 1,
@@ -578,12 +624,14 @@ app.post("/api/jarvis/generate-3d-image", requireAuth, async (req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (err: any) {
-    console.error("3D Image Generation Error:", err);
-    // Return a pristine fallback holographic schematic data URI if generation quota/key is limited
-    res.json({
-      imageUrl: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1200&q=80",
-      prompt: req.body.prompt,
-      fallback: true,
+    console.error("Image Generation Error:", err);
+    // Honest failure. Previously this returned a stock Unsplash URL labelled as a
+    // generated hologram, so a dead image model looked like a working feature.
+    res.status(502).json({
+      error: "Image generation failed.",
+      code: "upstream_unavailable",
+      detail: (err?.message ?? String(err)).slice(0, 300),
+      model: MODELS.image,
       timestamp: new Date().toISOString()
     });
   }
@@ -608,7 +656,7 @@ app.post("/api/jarvis/code", requireAuth, async (req, res) => {
 
     try {
       const response = await aiClient.models.generateContent({
-        model: "gemini-3.8-flash",
+        model: MODELS.chat,
         contents: prompt,
         config: {
           systemInstruction: "You are J.A.R.V.I.S. Execute real computational analysis, physics simulations, algorithms, or complex formulas. You must execute Python code using your codeExecution tool to verify answers numerically before responding.",
@@ -745,7 +793,7 @@ app.post("/api/jarvis/vision/analyze", requireAuth, async (req, res) => {
     const prompt = query || "Provide an instantaneous tactical SITREP of what you observe in this video frame or screen view, Sir. Detect key objects, text, code, or user state.";
 
     const response = await aiClient.models.generateContent({
-      model: "gemini-3.8-flash",
+      model: MODELS.chat,
       contents: [
         {
           inlineData: {
@@ -887,6 +935,30 @@ app.post("/api/mcp/resources/read", requireAuth, (req, res) => {
   }
 });
 
+// --- Unknown API route handler ---
+// Must come after every real route and before the SPA fallback, so an unknown
+// /api/* path returns JSON 404 instead of the index.html shell.
+app.use('/api', (req, res) => {
+  res.status(404).json({
+    error: `No such endpoint: ${req.method} /api${req.path}`,
+    code: 'not_found',
+  });
+});
+
+// --- Central error handler ---
+// Registered last so every thrown AppError becomes an honest HTTP response
+// instead of being swallowed by a route-level `catch {}`.
+app.use((err: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const appErr = isAppError(err)
+    ? err
+    : new AppError('internal', (err as Error)?.message ?? 'Internal error', { cause: err });
+
+  if (appErr.status >= 500) {
+    console.error(`[error] ${req.method} ${req.path} -> ${appErr.code}: ${appErr.message}`);
+  }
+  res.status(appErr.status).json(appErr.toJSON());
+});
+
 async function startServer() {
   // Start background proactive daemon & MCP server
   try {
@@ -915,4 +987,12 @@ async function startServer() {
   });
 }
 
-startServer();
+// Export the fully-configured Express app so the contract test suite can boot it
+// on an ephemeral port. Do not start listening during tests.
+export { app };
+
+const isTestRun = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST);
+
+if (!isTestRun) {
+  startServer();
+}
