@@ -70,6 +70,11 @@ describe('auth gating', () => {
     ['GET', '/api/jarvis/reinforcement/metrics'],
     ['GET', '/api/mcp/tools'],
     ['GET', '/api/mcp/resources'],
+    ['GET', '/api/voice/voices'],
+    ['POST', '/api/voice/tts'],
+    ['POST', '/api/voice/tts/stream'],
+    ['POST', '/api/voice/live-token'],
+    ['POST', '/api/voice/converse/stream'],
   ];
 
   it.each(protectedRoutes)('%s %s requires a bearer token', async (method, path) => {

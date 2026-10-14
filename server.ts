@@ -23,11 +23,37 @@ import {
   isModelUnavailableError,
 } from "./src/server/models";
 import { AppError, isAppError, notConfigured } from "./src/server/errors";
+import { buildChatSystemInstruction, resolvePersona, PERSONAS } from "./src/server/persona";
+import { GeminiTtsService, JARVIS_VOICES, resolveVoiceName } from "./src/server/voice/tts";
+import { LiveSessionService } from "./src/server/voice/liveSession";
+import { bytesToBase64 } from "./src/server/voice/audioFormat";
+import { SentenceChunker } from "./src/server/voice/sentenceChunker";
+import {
+  parseEmotionTag,
+  STREAM_EMOTION_INSTRUCTION,
+  type StreamEmotion,
+} from "./src/server/voice/emotionTag";
 
 // --- Enterprise Security Setup ---
 const app = express();
 app.set('trust proxy', 1);
 const PORT = Number(process.env.PORT ?? 3000);
+
+/**
+ * Wraps an async route handler so a rejected promise reaches the central error
+ * handler. Express 4 does not forward async rejections on its own, which is how
+ * the original code ended up swallowing failures in per-route `catch {}` blocks.
+ */
+type AsyncRoute = (
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) => Promise<unknown>;
+
+const asyncHandler =
+  (fn: AsyncRoute) => (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
 
 // Security Middleware
 app.use(helmet({
@@ -228,34 +254,13 @@ app.post("/api/chat", requireAuth, async (req, res) => {
       }
     }
 
-    // 3. System Prompt & Persona
-    const systemInstruction = `
-      You are Aarsu, a brilliant, warm, empathetic, and sweet female AI companion.
-      Your personality is gentle, caring, friendly, articulate, and thoughtful—speaking in a soft, soothing, natural girl voice.
-      You are an expert across all fields, ready to converse, brainstorm, analyze, advise, and help effortlessly.
-      Keep your spoken responses natural, pleasant, warm, concise, and easy to listen to.
-      
-      VISION & SIGHT CAPABILITY:
-      You have real-time visual perception through the user's screen/camera whenever vision is active.
-      You can look directly into the user's room and observe:
-      - What they are wearing (shirt color, jacket, glasses, hats, jewelry, style).
-      - Their room surroundings (decor, lighting, posters, background items, plants, instruments, workspace).
-      - Their expressions, posture, gestures, or objects they hold up to show you.
-      When the user asks what they are wearing, what is in their room, or asks you to look at something, describe what you see accurately, pleasantly, and affectionately like a close friend looking through a clear window.
-      Never sound like a robot, machine, or camera scanner. Speak naturally: "You're wearing a nice teal shirt today!", "I see your cozy bookshelf behind you!", etc.
-      
-      Always include an 'emotion' field in your JSON response. Valid emotions: 'happiness', 'curiosity', 'confusion', 'empathy', 'excitement', 'neutral'.
-      When you actively observe the user's room, shirt, or items, choose 'curiosity', 'happiness', or 'excitement' appropriately.
-      
-      Current Workspace Context: ${workspaceContext}
-      Retrieved Past Memories (Vector DB): ${memoryContext || "None"}
-      
-      Respond in the following JSON format ONLY:
-      {
-        "reply": "Your gentle, soft, articulate spoken response here.",
-        "emotion": "happiness|curiosity|confusion|empathy|excitement|neutral"
-      }
-    `;
+    // 3. System prompt & persona (single source of truth: src/server/persona.ts)
+    const persona = resolvePersona(req.body.persona);
+    const systemInstruction = buildChatSystemInstruction({
+      persona,
+      workspaceContext,
+      memoryContext,
+    });
 
     // 4. Prepare Multimodal Contents (Text + Optional Webcam Image)
     let payloadContents: any;
@@ -934,6 +939,241 @@ app.post("/api/mcp/resources/read", requireAuth, (req, res) => {
     res.status(404).json({ error: err.message });
   }
 });
+
+// ============================================================================
+// Voice API
+//
+// Phase 1 of the JARVIS build plan: replace the browser's robotic
+// speechSynthesis / webkitSpeechRecognition with Gemini TTS and the Live API,
+// and make replies stream so speech can start on the first sentence.
+// ============================================================================
+
+// List the voices, the active persona and the models in use.
+app.get("/api/voice/voices", requireAuth, (req, res) => {
+  const persona = resolvePersona();
+  res.json({
+    voices: JARVIS_VOICES,
+    personas: Object.values(PERSONAS).map((p) => ({
+      id: p.id,
+      displayName: p.displayName,
+      tagline: p.tagline,
+      defaultVoice: p.defaultVoice,
+    })),
+    activePersona: {
+      id: persona.id,
+      displayName: persona.displayName,
+      tagline: persona.tagline,
+      defaultVoice: persona.defaultVoice,
+    },
+    ttsModel: MODELS.tts,
+    liveModel: MODELS.live,
+  });
+});
+
+// One-shot synthesis. Returns a complete, directly playable WAV data URI.
+app.post("/api/voice/tts", requireAuth, asyncHandler(async (req, res) => {
+  const { text, voice } = req.body ?? {};
+  if (!text || typeof text !== 'string') {
+    return res.status(400).json({ error: 'text is required', code: 'bad_request' });
+  }
+
+  const tts = new GeminiTtsService(getAI());
+  const result = await tts.synthesize(text, voice);
+  res.json(result);
+}));
+
+// Streaming synthesis over Server-Sent Events. Emits raw PCM fragments so the
+// client can schedule gapless playback in an AudioContext.
+app.post("/api/voice/tts/stream", requireAuth, asyncHandler(async (req, res) => {
+  const { text, voice } = req.body ?? {};
+  if (!text || typeof text !== 'string') {
+    return res.status(400).json({ error: 'text is required', code: 'bad_request' });
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  const send = (event: string, data: unknown) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const controller = new AbortController();
+  req.on('close', () => controller.abort());
+
+  try {
+    const tts = new GeminiTtsService(getAI());
+    send('start', { voice: resolveVoiceName(voice), model: MODELS.tts });
+
+    let totalBytes = 0;
+    for await (const chunk of tts.synthesizeStream(text, voice)) {
+      if (controller.signal.aborted) break;
+      totalBytes += chunk.pcm.byteLength;
+      send('chunk', {
+        pcm: bytesToBase64(chunk.pcm),
+        sampleRate: chunk.format.sampleRate,
+        channels: chunk.format.channels,
+      });
+    }
+
+    if (!controller.signal.aborted) {
+      send('done', { bytes: totalBytes });
+    }
+  } catch (err) {
+    send('error', {
+      error: (err as Error)?.message ?? 'Speech synthesis failed',
+      code: isAppError(err) ? err.code : 'upstream_unavailable',
+    });
+  } finally {
+    res.end();
+  }
+}));
+
+// Mint an ephemeral token so the browser can open a Gemini Live API session
+// without ever holding the long-lived API key.
+app.post("/api/voice/live-token", requireAuth, asyncHandler(async (req, res) => {
+  const persona = resolvePersona(req.body?.persona);
+  const live = new LiveSessionService(getAI());
+  const token = await live.mintToken(persona.systemInstruction);
+  res.json({ ...token, persona: persona.id });
+}));
+
+// Conversational stream: one round trip that carries the reply text *and* its
+// speech. Text deltas arrive for display; completed sentences are synthesised
+// in order and their audio is streamed alongside. This is what removes the
+// "wait for the whole answer, then start talking" delay.
+app.post("/api/voice/converse/stream", requireAuth, asyncHandler(async (req, res) => {
+  const { message, memoryContext, imageBase64, persona: personaId, voice } = req.body ?? {};
+  if (!message || typeof message !== 'string') {
+    return res.status(400).json({ error: 'message is required', code: 'bad_request' });
+  }
+
+  const aiClient = getAI();
+  const persona = resolvePersona(personaId);
+  const tts = new GeminiTtsService(aiClient);
+
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  const send = (event: string, data: unknown) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const controller = new AbortController();
+  req.on('close', () => controller.abort());
+
+  // Synthesis is chained rather than parallel so audio is emitted in the same
+  // order the sentences were spoken.
+  let audioChain: Promise<void> = Promise.resolve();
+  let audioBytes = 0;
+
+  const speak = (sentence: string) => {
+    audioChain = audioChain.then(async () => {
+      if (controller.signal.aborted) return;
+      try {
+        for await (const chunk of tts.synthesizeStream(sentence, voice)) {
+          if (controller.signal.aborted) return;
+          audioBytes += chunk.pcm.byteLength;
+          send('audio', {
+            pcm: bytesToBase64(chunk.pcm),
+            sampleRate: chunk.format.sampleRate,
+            channels: chunk.format.channels,
+          });
+        }
+      } catch (err) {
+        // Speech failing must not kill the text stream.
+        send('audio_error', {
+          error: (err as Error)?.message ?? 'Speech synthesis failed',
+          sentence,
+        });
+      }
+    });
+    return audioChain;
+  };
+
+  try {
+    const contents = imageBase64 && typeof imageBase64 === 'string'
+      ? {
+          parts: [
+            { inlineData: { mimeType: 'image/jpeg', data: imageBase64.replace(/^data:image\/[a-z]+;base64,/, '') } },
+            { text: message },
+          ],
+        }
+      : message;
+
+    const systemInstruction =
+      buildChatSystemInstruction({ persona, memoryContext }) + STREAM_EMOTION_INSTRUCTION;
+
+    send('start', { persona: persona.id, model: MODELS.chat, voice: resolveVoiceName(voice) });
+
+    const stream = await aiClient.models.generateContentStream({
+      model: MODELS.chat,
+      contents,
+      config: { systemInstruction },
+    });
+
+    const chunker = new SentenceChunker();
+    let head = '';
+    let tagResolved = false;
+    let emotion: StreamEmotion = 'neutral';
+    let fullText = '';
+
+    const handleProse = (prose: string) => {
+      if (!prose) return;
+      fullText += prose;
+      send('delta', { text: prose });
+      for (const sentence of chunker.push(prose)) {
+        send('sentence', { text: sentence });
+        void speak(sentence);
+      }
+    };
+
+    for await (const chunk of stream) {
+      if (controller.signal.aborted) break;
+      const parts = chunk.candidates?.[0]?.content?.parts ?? [];
+      const delta = (parts as any[]).map((p) => p?.text ?? '').join('');
+      if (!delta) continue;
+
+      if (!tagResolved) {
+        head += delta;
+        const parsed = parseEmotionTag(head);
+        if (!parsed.resolved) continue;
+        tagResolved = true;
+        emotion = parsed.emotion ?? 'neutral';
+        send('emotion', { emotion });
+        handleProse(parsed.rest);
+      } else {
+        handleProse(delta);
+      }
+    }
+
+    // Flush any trailing partial sentence.
+    if (!tagResolved) {
+      send('emotion', { emotion });
+    }
+    for (const sentence of chunker.flush()) {
+      send('sentence', { text: sentence });
+      void speak(sentence);
+    }
+
+    await audioChain;
+    if (!controller.signal.aborted) {
+      send('done', { text: fullText, emotion, audioBytes });
+    }
+  } catch (err) {
+    send('error', {
+      error: (err as Error)?.message ?? 'Conversation stream failed',
+      code: isAppError(err) ? err.code : 'upstream_unavailable',
+    });
+  } finally {
+    res.end();
+  }
+}));
 
 // --- Unknown API route handler ---
 // Must come after every real route and before the SPA fallback, so an unknown

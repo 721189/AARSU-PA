@@ -5,7 +5,8 @@ import { ChatInterface } from './components/ChatInterface';
 import { JarvisHud } from './components/JarvisHud';
 import { Emotion, SpeechViseme, MicroExpression } from './types';
 import firebaseConfig from '../firebase-applet-config.json';
-import { initAuth } from './lib/firebase';
+import { initAuth, authenticatedFetch } from './lib/firebase';
+import { jarvisVoice } from './lib/jarvisVoice';
 import { 
   MessageSquare, 
   Zap, 
@@ -47,16 +48,12 @@ export default function App() {
 
   const handleVocalize = (text?: string) => {
     if (!text || typeof text !== 'string') return;
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const cleaned = text.replace(/[*#_`]/g, '').slice(0, 300).trim();
-      if (!cleaned) return;
-      const utterance = new SpeechSynthesisUtterance(cleaned);
-      utterance.onstart = () => setIsSpeaking(true);
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
-      window.speechSynthesis.speak(utterance);
-    }
+    // Single speech path: Gemini TTS through the shared voice engine. The old
+    // implementation called window.speechSynthesis here while ChatInterface ran
+    // its own separate TTS, so the two surfaces spoke in different voices.
+    const cleaned = text.replace(/[*#_`]/g, '').slice(0, 400).trim();
+    if (!cleaned) return;
+    void jarvisVoice.speak(cleaned, authenticatedFetch);
   };
 
   const formatUptime = (secs: number) => {

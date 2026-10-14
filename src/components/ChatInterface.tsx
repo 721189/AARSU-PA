@@ -26,6 +26,7 @@ import { signInWithGoogle, initAuth, auth, authenticatedFetch, getFreshIdToken }
 import { saveToMemory, retrieveContext } from '../lib/memory';
 import { VisionManager, VisionManagerHandle } from './VisionManager';
 import { voiceHotkeyEngine } from '../lib/voiceHotkeyEngine';
+import { jarvisVoice } from '../lib/jarvisVoice';
 import { jarvisAudio } from '../lib/audioEngine';
 
 interface ChatInterfaceProps {
@@ -40,45 +41,43 @@ interface ChatInterfaceProps {
   onToggleCollapse?: () => void;
 }
 
-type SoftnessPresetKey = 'soft_sweet' | 'gentle_whisper' | 'playful_bright';
+type SoftnessPresetKey = 'jarvis_classic' | 'tactical' | 'analyst';
 
 interface SoftnessPreset {
   label: string;
   shortLabel: string;
-  pitch: number;
-  rate: number;
-  volume: number;
+  /** Gemini TTS prebuilt voice name (see src/server/voice/tts.ts). */
+  voice: string;
   description: string;
   icon: string;
 }
 
+/**
+ * Voice presets now map to real Gemini TTS voices. Previously they only nudged
+ * `SpeechSynthesisUtterance.pitch`/`rate`, which the browser's robotic voice
+ * could barely express and which had no effect at all on the header.
+ */
 const SOFTNESS_PRESETS: Record<SoftnessPresetKey, SoftnessPreset> = {
-  soft_sweet: {
-    label: 'Soft & Sweet Girl',
-    shortLabel: 'Soft & Sweet',
-    pitch: 1.28,
-    rate: 0.92,
-    volume: 0.88,
-    description: 'Tender, melodic, warm feminine tone',
-    icon: '🌸'
+  jarvis_classic: {
+    label: 'J.A.R.V.I.S. Classic',
+    shortLabel: 'Classic',
+    voice: 'Charon',
+    description: 'Composed, informative, British butler',
+    icon: '🛡️'
   },
-  gentle_whisper: {
-    label: 'Gentle & Soothing',
-    shortLabel: 'Soothing',
-    pitch: 1.18,
-    rate: 0.88,
-    volume: 0.82,
-    description: 'Calm, soft, intimate companion pace',
-    icon: '🕊️'
+  tactical: {
+    label: 'Tactical',
+    shortLabel: 'Tactical',
+    voice: 'Orus',
+    description: 'Firm and decisive',
+    icon: '⚡'
   },
-  playful_bright: {
-    label: 'Playful & Bright',
-    shortLabel: 'Playful',
-    pitch: 1.34,
-    rate: 0.95,
-    volume: 0.90,
-    description: 'Lively, youthful feminine cadence',
-    icon: '✨'
+  analyst: {
+    label: 'Analyst',
+    shortLabel: 'Analyst',
+    voice: 'Iapetus',
+    description: 'Clear, precise, unhurried',
+    icon: '📐'
   }
 };
 
@@ -102,9 +101,11 @@ export function ChatInterface({
   
   // Voice Controls State
   const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [selectedPreset, setSelectedPreset] = useState<SoftnessPresetKey>('soft_sweet');
+  const [selectedPreset, setSelectedPreset] = useState<SoftnessPresetKey>('jarvis_classic');
+  // Gemini TTS voice name (not a browser SpeechSynthesis voiceURI).
   const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>('');
-  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [availableVoices, setAvailableVoices] = useState<Array<{ name: string; label: string; style: string }>>([]);
+  const [activePersona, setActivePersona] = useState<{ id: string; displayName: string; tagline: string; defaultVoice: string } | null>(null);
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [showWorkspaceCard, setShowWorkspaceCard] = useState(false);
   const [proactiveSuggestions, setProactiveSuggestions] = useState<string[]>([]);
@@ -152,19 +153,15 @@ export function ChatInterface({
     }
   };
   
+  const personaName = activePersona?.displayName || 'J.A.R.V.I.S.';
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const visemeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const speechIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const visionRef = useRef<VisionManagerHandle>(null);
 
-  // Clean up speech timers on unmount
+  // Stop any in-flight speech when the console unmounts.
   useEffect(() => {
     return () => {
-      if (visemeTimeoutRef.current) clearTimeout(visemeTimeoutRef.current);
-      if (speechIntervalRef.current) clearInterval(speechIntervalRef.current);
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-      }
+      jarvisVoice.stop();
     };
   }, []);
 
@@ -202,36 +199,28 @@ export function ChatInterface({
     };
   }, [firebaseToken, workspaceToken]);
 
-  // Initialize and prioritize soft female speech synthesis voices
+  // Load the available Gemini TTS voices from the server, which is the single
+  // source of truth. The browser's speechSynthesis voice list is no longer used.
   useEffect(() => {
-    const loadVoices = () => {
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        const voices = window.speechSynthesis.getVoices();
-        if (voices.length > 0) {
-          setAvailableVoices(voices);
+    if (!firebaseToken) return;
+    let cancelled = false;
 
-          // Auto-select best female voice if none selected yet
-          if (!selectedVoiceURI) {
-            const bestFemale = findBestFemaleVoice(voices);
-            if (bestFemale) {
-              setSelectedVoiceURI(bestFemale.voiceURI);
-            }
-          }
-        }
-      }
-    };
-
-    loadVoices();
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.onvoiceschanged = loadVoices;
-    }
+    authenticatedFetch('/api/voice/voices')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        setAvailableVoices(data.voices || []);
+        setActivePersona(data.activePersona || null);
+        setSelectedVoiceURI((current) => current || data.activePersona?.defaultVoice || '');
+      })
+      .catch(() => {
+        // Voice catalogue is optional; the server default still applies.
+      });
 
     return () => {
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        window.speechSynthesis.onvoiceschanged = null;
-      }
+      cancelled = true;
     };
-  }, [selectedVoiceURI]);
+  }, [firebaseToken]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -276,61 +265,19 @@ export function ChatInterface({
     }
   };
 
-  // Helper: Find softest and highest quality female voice available
-  const findBestFemaleVoice = (voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null => {
-    if (!voices || voices.length === 0) return null;
-
-    // Ordered list of top soft natural feminine voices across Windows, macOS, Android, ChromeOS, iOS
-    const topFemalePatterns = [
-      /microsoft jenny online/i,
-      /microsoft jenny/i,
-      /google uk english female/i,
-      /microsoft aria online/i,
-      /microsoft sonia online/i,
-      /samantha/i,
-      /victoria/i,
-      /google us english female/i,
-      /karen/i,
-      /tessa/i,
-      /serena/i,
-      /moira/i,
-      /fiona/i,
-      /veena/i,
-      /microsoft zira/i,
-      /female/i,
-      /woman/i,
-      /girl/i
-    ];
-
-    for (const pattern of topFemalePatterns) {
-      const match = voices.find(v => pattern.test(v.name));
-      if (match) return match;
-    }
-
-    // Secondary fallback: Any English voice with female characteristic
-    const enFemale = voices.find(v => v.lang.startsWith('en') && /female|natural/i.test(v.name));
-    if (enFemale) return enFemale;
-
-    // General English voice
-    const enVoice = voices.find(v => v.lang.startsWith('en') && v.default) 
-      || voices.find(v => v.lang.startsWith('en'));
-    return enVoice || voices[0] || null;
-  };
-
-  // Speaks text using the soft girl voice calibration
+  // Speaks text using the shared Gemini TTS engine (JARVIS persona by default).
+  // Speech is delegated to the shared Gemini TTS engine so the chat dock and the
+  // header speak with the same voice (see src/lib/jarvisVoice.ts). The previous
+  // implementation ran window.speechSynthesis here with its own pitch/rate
+  // hacks, which is why the two surfaces sounded different.
   const speak = (rawText: string) => {
-    if (!voiceEnabled || typeof window === 'undefined' || !('speechSynthesis' in window)) {
-      return;
-    }
+    if (!voiceEnabled) return;
 
-    // Cancel any current utterance cleanly
-    window.speechSynthesis.cancel();
-
-    // Clean formatting and artifacts for silky-smooth spoken voice
+    // Strip formatting that should not be read aloud.
     const cleanText = rawText
       .replace(/```[\s\S]*?```/g, '')
       .replace(/`([^`]+)`/g, '$1')
-      .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
       .replace(/[*#_~>]/g, '')
       .replace(/https?:\/\/\S+/g, '')
       .replace(/e\.g\./gi, 'for example')
@@ -339,135 +286,27 @@ export function ChatInterface({
       .trim();
 
     if (!cleanText) return;
+    void jarvisVoice.speak(cleanText, authenticatedFetch, SOFTNESS_PRESETS[selectedPreset].voice);
+  };
 
-    // Clear any active timers
-    if (visemeTimeoutRef.current) clearTimeout(visemeTimeoutRef.current);
-    if (speechIntervalRef.current) clearInterval(speechIntervalRef.current);
-
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    const preset = SOFTNESS_PRESETS[selectedPreset];
-
-    // Find requested voice or best female voice
-    const voices = availableVoices.length > 0 
-      ? availableVoices 
-      : window.speechSynthesis.getVoices();
-
-    let targetVoice: SpeechSynthesisVoice | null = null;
-    if (selectedVoiceURI) {
-      targetVoice = voices.find(v => v.voiceURI === selectedVoiceURI) || null;
-    }
-    if (!targetVoice) {
-      targetVoice = findBestFemaleVoice(voices);
-    }
-
-    if (targetVoice) {
-      utterance.voice = targetVoice;
-    }
-
-    // Apply soft feminine acoustics
-    utterance.pitch = preset.pitch;
-    utterance.rate = preset.rate;
-    utterance.volume = preset.volume;
-
-    const stopLipSync = () => {
-      if (visemeTimeoutRef.current) clearTimeout(visemeTimeoutRef.current);
-      if (speechIntervalRef.current) clearInterval(speechIntervalRef.current);
-      onVisemeChange?.({ isOpen: false, openness: 0, shape: 'rest' });
-      onSpeakingChange?.(false);
-    };
-
-    // Analyze spoken words to determine realistic anime lip shapes and openness
-    const getWordViseme = (word: string): { shape: 'A' | 'O' | 'E'; openness: number } => {
-      const lower = word.toLowerCase();
-      // Round vowels: o, oo, u, w
-      if (/[ou]|oo|ow|round/.test(lower)) {
-        return { shape: 'O', openness: 0.7 };
-      }
-      // Stretched/smile vowels: e, ee, i, y
-      if (/[ei]|ee|ay|igh/.test(lower)) {
-        return { shape: 'E', openness: 0.55 };
-      }
-      // Open vowels: a, ah, ar
-      if (/[a]|ah|ar|aw/.test(lower)) {
-        return { shape: 'A', openness: 0.85 };
-      }
-      return { shape: 'A', openness: 0.6 };
-    };
-
-    // Track word boundaries for precise word-to-lip matching
-    utterance.onboundary = (event: SpeechSynthesisEvent) => {
-      if (event.name === 'word' || (event as any).charIndex !== undefined) {
-        const charIdx = event.charIndex || 0;
-        const sub = cleanText.slice(charIdx);
-        const match = sub.match(/^[^\s,.;:!?]+/);
-        const currentWord = match ? match[0] : '';
-        const { shape, openness } = getWordViseme(currentWord);
-
-        // Open lips for the syllable
+  // Lip-sync is driven by the real output audio envelope instead of a guessed
+  // word-to-shape mapping, so the mouth matches the sound actually playing.
+  useEffect(() => {
+    return jarvisVoice.on({
+      onLevel: (level) => {
+        if (!level || level <= 0.004) {
+          onVisemeChange?.({ isOpen: false, openness: 0, shape: 'rest' });
+          return;
+        }
+        const openness = Math.min(1, level * 3.2);
         onVisemeChange?.({
           isOpen: true,
           openness,
-          shape,
-          currentWord,
+          shape: openness > 0.66 ? 'A' : openness > 0.33 ? 'E' : 'O',
         });
-
-        // Articulate: smooth syllable dip
-        if (visemeTimeoutRef.current) clearTimeout(visemeTimeoutRef.current);
-        visemeTimeoutRef.current = setTimeout(() => {
-          onVisemeChange?.({
-            isOpen: true,
-            openness: openness * 0.25,
-            shape: 'rest',
-            currentWord,
-          });
-        }, 120);
-      } else if (event.name === 'sentence') {
-        // Natural pause at sentence end: close lips and trigger lifelike micro-expression pause
-        onVisemeChange?.({ isOpen: false, openness: 0, shape: 'rest' });
-        
-        // During natural pauses between spoken sentences, trigger micro-expression based on emotion
-        const pauseMicro = (emotion === 'curiosity' || emotion === 'excitement')
-          ? 'eye_widening'
-          : (emotion === 'confusion' || emotion === 'neutral')
-            ? 'brow_furrow'
-            : 'soft_smile_squint';
-        onMicroExpressionChange?.(pauseMicro);
-        setTimeout(() => {
-          onMicroExpressionChange?.('none');
-        }, 700);
-      }
-    };
-
-    utterance.onstart = () => {
-      onSpeakingChange?.(true);
-      // Rhythmic cadence fallback ensuring lips continue moving smoothly with audio even if onboundary events are batched
-      let beat = 0;
-      speechIntervalRef.current = setInterval(() => {
-        beat++;
-        const mod = beat % 4;
-        if (mod === 0) {
-          onVisemeChange?.({ isOpen: true, openness: 0.75, shape: 'A' });
-        } else if (mod === 1) {
-          onVisemeChange?.({ isOpen: true, openness: 0.45, shape: 'E' });
-        } else if (mod === 2) {
-          onVisemeChange?.({ isOpen: true, openness: 0.65, shape: 'O' });
-        } else {
-          onVisemeChange?.({ isOpen: true, openness: 0.1, shape: 'rest' });
-        }
-      }, 150);
-    };
-
-    utterance.onend = () => {
-      stopLipSync();
-    };
-
-    utterance.onerror = (e) => {
-      console.warn("Speech synthesis notice:", e);
-      stopLipSync();
-    };
-
-    window.speechSynthesis.speak(utterance);
-  };
+      },
+    });
+  }, [onVisemeChange]);
 
   const handleSend = async (text: string = input) => {
     if (!text.trim()) return;
@@ -500,7 +339,7 @@ export function ChatInterface({
     setInput('');
     setIsLoading(true);
 
-    // Natural conversation pause: User just finished speaking, Aarsu attentively pauses and ponders
+    // Natural conversation pause: the user just finished speaking; pause and ponder.
     onMicroExpressionChange?.('brow_furrow');
 
     try {
@@ -521,57 +360,94 @@ export function ChatInterface({
         }
       }
 
-      const res = await authenticatedFetch('/api/chat', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          message: text, 
-          token: workspaceToken, 
-          memoryContext,
-          imageBase64
-        })
-      });
-      
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `Server Error: ${res.status}`);
-      }
+      const replyId = (Date.now() + 1).toString();
 
-      const data = await res.json();
-      
-      const aiMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        sender: 'aarsu',
-        text: data.reply,
-        emotion: (data.emotion as Emotion) || 'neutral',
-        timestamp: new Date()
-      };
-      
-      setMessages(prev => [...prev, aiMsg]);
-      onEmotionChange((data.emotion as Emotion) || 'neutral');
-      // Natural transition: momentary eye-widening recognition before talking
-      onMicroExpressionChange?.('eye_widening');
-      setTimeout(() => {
-        onMicroExpressionChange?.('none');
-      }, 450);
-      speak(data.reply);
-      
-      if (uid) {
-        saveToMemory(uid, `User: ${text} | Aarsu: ${data.reply}`, currentToken);
+      // Streaming turn: text and speech arrive together, so the reply is spoken
+      // from the first completed sentence instead of after the entire answer.
+      if (voiceEnabled) {
+        setMessages(prev => [...prev, {
+          id: replyId,
+          sender: 'aarsu',
+          text: '',
+          emotion: 'neutral',
+          timestamp: new Date(),
+        }]);
+
+        const fullReply = await jarvisVoice.converse({
+          message: text,
+          imageBase64: imageBase64 || undefined,
+          memoryContext,
+          voice: SOFTNESS_PRESETS[selectedPreset].voice,
+          persona: activePersona?.id,
+          fetchImpl: authenticatedFetch,
+          onDelta: (delta) => {
+            setMessages(prev => prev.map(m =>
+              m.id === replyId ? { ...m, text: m.text + delta } : m
+            ));
+          },
+          onEmotion: (emotion) => {
+            const typed = (emotion as Emotion) || 'neutral';
+            onEmotionChange(typed);
+            setMessages(prev => prev.map(m =>
+              m.id === replyId ? { ...m, emotion: typed } : m
+            ));
+          },
+        });
+
+        if (!fullReply.trim()) {
+          throw new Error('The assistant returned an empty reply.');
+        }
+
+        onMicroExpressionChange?.('eye_widening');
+        setTimeout(() => onMicroExpressionChange?.('none'), 450);
+
+        if (uid) {
+          saveToMemory(uid, `User: ${text} | Assistant: ${fullReply}`, currentToken);
+        }
+      } else {
+        // Muted: fetch the reply as text only.
+        const res = await authenticatedFetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: text,
+            token: workspaceToken,
+            memoryContext,
+            imageBase64,
+          }),
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || `Server Error: ${res.status}`);
+        }
+
+        const data = await res.json();
+        const typedEmotion = (data.emotion as Emotion) || 'neutral';
+
+        setMessages(prev => [...prev, {
+          id: replyId,
+          sender: 'aarsu',
+          text: data.reply,
+          emotion: typedEmotion,
+          timestamp: new Date(),
+        }]);
+        onEmotionChange(typedEmotion);
+
+        if (uid) {
+          saveToMemory(uid, `User: ${text} | Assistant: ${data.reply}`, currentToken);
+        }
       }
-      
     } catch (err: any) {
       console.warn("Chat interaction notice:", err);
       onEmotionChange('empathy');
       
-      let friendlyError = "I'm right here with you! Could you please try sending that again in just a moment?";
+      let friendlyError = "I could not complete that request, Sir. The details are in the server log.";
       const msg = (err?.message || '').toLowerCase();
       if (msg.includes("503") || msg.includes("high demand") || msg.includes("spikes in demand")) {
-        friendlyError = "The AI service is experiencing a brief surge in traffic right now. Please ask me again in just a few seconds!";
+        friendlyError = "The model is briefly overloaded, Sir. Try again in a few seconds.";
       } else if (msg.includes("429") || msg.includes("resource_exhausted") || msg.includes("quota")) {
-        friendlyError = "We temporarily reached our speed limit. Please wait a brief moment before sending another message.";
+        friendlyError = "We have hit the API rate limit, Sir. Give it a moment.";
       } else if (err?.message && !err.message.includes("{") && !err.message.includes("ApiError") && !err.message.includes("Server Error: 500")) {
         friendlyError = err.message;
       }
@@ -597,14 +473,9 @@ export function ChatInterface({
   };
 
   const testSoftVoice = () => {
-    speak("Hello! I am Aarsu. My voice is soft, gentle, and clear now. How can I help you today?");
+    speak(`Good evening, Sir. Voice check complete. ${personaName} is online and ready.`);
   };
 
-  // Filter voices that are feminine or English for user selector
-  const feminineVoices = availableVoices.filter(v => 
-    /female|jenny|aria|sonia|samantha|victoria|karen|tessa|serena|woman|girl/i.test(v.name) ||
-    v.lang.startsWith('en')
-  );
 
   return (
     <div className="h-full flex flex-col justify-between overflow-hidden bg-slate-900/90 text-slate-100">
@@ -618,7 +489,7 @@ export function ChatInterface({
             </div>
             <div>
               <div className="flex items-center gap-1.5">
-                <h1 className="font-bold text-sm text-white tracking-wide">Aarsu</h1>
+                <h1 className="font-bold text-sm text-white tracking-wide">{personaName}</h1>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-pink-500/20 text-pink-300 font-medium border border-pink-500/30 flex items-center gap-1">
                   <Heart className="w-2.5 h-2.5 fill-pink-400 text-pink-400" /> AI Companion
                 </span>
@@ -628,7 +499,7 @@ export function ChatInterface({
                 </span>
               </div>
               <div className="flex items-center gap-2 text-[11px] text-slate-400">
-                <span>Soft girl voice</span>
+                <span>Gemini TTS voice</span>
                 {isSpeaking && (
                   <span className="flex items-center gap-1 text-pink-400 font-medium">
                     • <span className="w-1.5 h-1.5 rounded-full bg-pink-400 animate-ping" /> Speaking...
@@ -640,7 +511,7 @@ export function ChatInterface({
 
           {/* Top Right Action Icons */}
           <div className="flex items-center gap-1.5">
-            {/* Vision Sight Manager (Let Aarsu See You) */}
+            {/* Vision Sight Manager (Let the assistant see you) */}
             <VisionManager
               ref={visionRef}
               onVisionStatusChange={(active) => {
@@ -681,7 +552,7 @@ export function ChatInterface({
             {/* Test Voice Quick Button */}
             <button
               onClick={testSoftVoice}
-              title="Test soft girl voice sample"
+              title="Test the Gemini TTS voice"
               className="px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700/80 text-pink-300 hover:text-pink-200 text-xs font-medium transition-colors flex items-center gap-1"
             >
               <Volume2 className="w-3.5 h-3.5" /> Test
@@ -690,9 +561,8 @@ export function ChatInterface({
             {/* Voice Mute Toggle */}
             <button
               onClick={() => {
-                if (voiceEnabled && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-                  window.speechSynthesis.cancel();
-                  onSpeakingChange?.(false);
+                if (voiceEnabled) {
+                  jarvisVoice.stop();
                 }
                 setVoiceEnabled(!voiceEnabled);
               }}
@@ -764,26 +634,27 @@ export function ChatInterface({
               })}
             </div>
 
-            {/* Browser Voice Selector */}
-            {feminineVoices.length > 0 && (
+            {/* Gemini TTS Voice Selector */}
+            {availableVoices.length > 0 && (
               <div className="flex flex-col gap-1 mt-1">
                 <label className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
-                  Available Voice Model
+                  Gemini Voice{activePersona ? ` · ${activePersona.displayName}` : ''}
                 </label>
                 <select
                   value={selectedVoiceURI}
                   onChange={(e) => {
-                    setSelectedVoiceURI(e.target.value);
+                    const next = e.target.value;
+                    setSelectedVoiceURI(next);
+                    const voice = availableVoices.find(v => v.name === next);
                     setTimeout(() => {
-                      speak("Voice changed. I hope you like how soft this sounds.");
+                      speak(`Voice set to ${voice?.label || next}.`);
                     }, 50);
                   }}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-pink-500"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-cyan-500"
                 >
-                  {feminineVoices.map((v) => (
-                    <option key={v.voiceURI} value={v.voiceURI}>
-                      {/female|jenny|aria|samantha|victoria|girl/i.test(v.name) ? '🌸 ' : '🗣️ '}
-                      {v.name} ({v.lang})
+                  {availableVoices.map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {v.label} — {v.style}
                     </option>
                   ))}
                 </select>
@@ -857,7 +728,7 @@ export function ChatInterface({
             <div className="w-12 h-12 rounded-full bg-slate-800/80 border border-slate-700 flex items-center justify-center text-pink-400 shadow-inner">
               <Sparkles className="w-6 h-6" />
             </div>
-            <p className="text-sm font-semibold text-slate-200">Talk with Aarsu</p>
+            <p className="text-sm font-semibold text-slate-200">Talk with {personaName}</p>
             <p className="text-xs text-slate-400 max-w-xs leading-relaxed">
               Her face is right beside you on stage. Type or tap the microphone to speak, and she will respond in her soft, gentle girl voice!
             </p>
@@ -882,7 +753,7 @@ export function ChatInterface({
               onClick={testSoftVoice}
               className="mt-2 px-3 py-1.5 rounded-full bg-slate-800 hover:bg-slate-750 border border-slate-700 text-pink-300 text-xs flex items-center gap-1.5 shadow-sm transition-colors"
             >
-              <Volume2 className="w-3.5 h-3.5" /> Listen to Aarsu's Voice
+              <Volume2 className="w-3.5 h-3.5" /> Hear {personaName}'s voice
             </button>
           </div>
         )}
@@ -893,7 +764,7 @@ export function ChatInterface({
             className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
           >
             <div className="text-[10px] text-slate-500 mb-1 px-1">
-              {msg.sender === 'user' ? 'You' : 'Aarsu'}
+              {msg.sender === 'user' ? 'You' : personaName}
             </div>
             <div 
               className={`max-w-[90%] rounded-2xl px-3.5 py-2.5 flex items-start gap-2 shadow-md ${
@@ -922,7 +793,7 @@ export function ChatInterface({
           <div className="flex justify-start">
             <div className="bg-slate-800/90 border border-slate-700 rounded-2xl px-3.5 py-2 text-pink-300 text-xs flex items-center gap-2 shadow-md">
               <Loader2 className="w-3.5 h-3.5 animate-spin text-pink-400" /> 
-              <span>Aarsu is thinking softly...</span>
+              <span>{personaName} is thinking...</span>
             </div>
           </div>
         )}
@@ -948,7 +819,7 @@ export function ChatInterface({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-          placeholder={firebaseToken ? "Ask Aarsu anything..." : "Sign in to chat with Aarsu..."}
+          placeholder={firebaseToken ? `Ask ${personaName} anything...` : `Sign in to chat with ${personaName}...`}
           className="flex-1 bg-slate-800/90 border border-slate-700 rounded-full px-4 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-pink-500/80 transition-colors placeholder:text-slate-500"
         />
 
