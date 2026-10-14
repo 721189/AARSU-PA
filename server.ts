@@ -36,6 +36,62 @@ import {
 import { ToolRegistry } from "./src/server/tools/registry";
 import { runToolLoop } from "./src/server/tools/toolLoop";
 import { createGeminiModelCaller } from "./src/server/tools/geminiCaller";
+import { createMemoryStore } from "./src/server/memory";
+import { MemoryService, createGeminiEmbedder } from "./src/server/memory/service";
+
+// --- Memory (Phase 3) ---
+// A single process-wide memory service. The store is chosen once (Firestore when
+// credentials exist, otherwise an explicitly non-durable in-process store) and
+// reported in /api/health. Embeddings are generated server-side, so the browser
+// no longer downloads documents to rank them.
+let memoryServiceInstance: MemoryService | null = null;
+
+function getMemoryService(): MemoryService {
+  if (!memoryServiceInstance) {
+    let embedder = null;
+    try {
+      embedder = createGeminiEmbedder(getAI());
+    } catch {
+      // No Gemini key: recall degrades to lexical matching.
+      embedder = null;
+    }
+    memoryServiceInstance = new MemoryService({ store: createMemoryStore(), embedder });
+  }
+  return memoryServiceInstance;
+}
+
+/**
+ * Builds the memory context injected into a turn: the structured user profile
+ * plus the most relevant stored memories.
+ */
+async function buildMemoryContext(userId: string | undefined, query: string): Promise<string> {
+  if (!userId) return '';
+  try {
+    const memory = getMemoryService();
+    const [profile, recalled] = await Promise.all([
+      memory.profileContextFor(userId),
+      memory.contextFor(userId, query),
+    ]);
+    return [profile, recalled].filter(Boolean).join('\n');
+  } catch (err) {
+    console.warn('[memory] context retrieval failed:', (err as Error)?.message);
+    return '';
+  }
+}
+
+/**
+ * Records a short episodic summary of a completed turn, so the assistant can
+ * answer "what did we do last week?". Bounded to keep the store small.
+ */
+async function recordTurnEpisode(userId: string | undefined, userText: string, replyText: string): Promise<void> {
+  if (!userId || !replyText) return;
+  try {
+    const summary = `User: ${userText.slice(0, 120)} | Assistant: ${replyText.slice(0, 120)}`;
+    await getMemoryService().recordEpisode(userId, summary);
+  } catch (err) {
+    console.warn('[memory] failed to record episode:', (err as Error)?.message);
+  }
+}
 
 // --- Enterprise Security Setup ---
 const app = express();
@@ -135,6 +191,16 @@ app.get("/api/health", async (req, res) => {
     checks.cache = { status: 'down', detail: (err as Error).message };
   }
 
+  // 4. Memory backend — reported so a non-durable fallback is never hidden.
+  try {
+    const backend = getMemoryService().backend;
+    checks.memory = backend.durable
+      ? { status: 'ok', detail: backend.kind }
+      : { status: 'degraded', detail: `${backend.kind} (not durable - data is lost on restart)` };
+  } catch (err) {
+    checks.memory = { status: 'down', detail: (err as Error).message };
+  }
+
   const anyDown = Object.values(checks).some((c) => c.status === 'down');
   const anyDegraded = Object.values(checks).some((c) => c.status === 'degraded');
 
@@ -211,7 +277,7 @@ async function generateContentWithFallback(aiClient: GoogleGenAI, contents: any,
 // Aarsu Chat Interaction Route (Secured with requireAuth)
 app.post("/api/chat", requireAuth, async (req, res) => {
   try {
-    const { message, token, memoryContext, imageBase64 } = req.body;
+    const { message, token, imageBase64 } = req.body;
     
     if (!message) {
       return res.status(400).json({ error: "Message is required" });
@@ -257,6 +323,12 @@ app.post("/api/chat", requireAuth, async (req, res) => {
       }
     }
 
+    // 2b. Server-side memory retrieval. Previously the browser fetched 50
+    // documents and ranked them client-side; now the server embeds and ranks.
+    const userId = req.user?.uid;
+    const memoryContext =
+      (await buildMemoryContext(userId, message)) || (typeof req.body.memoryContext === 'string' ? req.body.memoryContext : '');
+
     // 3. System prompt & persona (single source of truth: src/server/persona.ts)
     const persona = resolvePersona(req.body.persona);
     const systemInstruction = buildChatSystemInstruction({
@@ -299,6 +371,8 @@ app.post("/api/chat", requireAuth, async (req, res) => {
     if (!parsedResult.reply && (parsedResult.message || parsedResult.text || parsedResult.response)) {
       parsedResult.reply = parsedResult.message || parsedResult.text || parsedResult.response;
     }
+
+    await recordTurnEpisode(userId, message, parsedResult.reply ?? '');
 
     res.json(parsedResult);
   } catch (error: any) {
@@ -1048,7 +1122,7 @@ app.post("/api/voice/live-token", requireAuth, asyncHandler(async (req, res) => 
 // in order and their audio is streamed alongside. This is what removes the
 // "wait for the whole answer, then start talking" delay.
 app.post("/api/voice/converse/stream", requireAuth, asyncHandler(async (req, res) => {
-  const { message, memoryContext, imageBase64, persona: personaId, voice } = req.body ?? {};
+  const { message, imageBase64, persona: personaId, voice } = req.body ?? {};
   if (!message || typeof message !== 'string') {
     return res.status(400).json({ error: 'message is required', code: 'bad_request' });
   }
@@ -1109,6 +1183,8 @@ app.post("/api/voice/converse/stream", requireAuth, asyncHandler(async (req, res
         }
       : message;
 
+    const memoryContext = await buildMemoryContext(req.user?.uid, message);
+
     const systemInstruction =
       buildChatSystemInstruction({ persona, memoryContext }) + STREAM_EMOTION_INSTRUCTION;
 
@@ -1165,6 +1241,7 @@ app.post("/api/voice/converse/stream", requireAuth, asyncHandler(async (req, res
     }
 
     await audioChain;
+    await recordTurnEpisode(req.user?.uid, message, fullText);
     if (!controller.signal.aborted) {
       send('done', { text: fullText, emotion, audioBytes });
     }
@@ -1189,7 +1266,11 @@ app.post("/api/voice/converse/stream", requireAuth, asyncHandler(async (req, res
 
 // List the registered tools and which of them require confirmation.
 app.get("/api/agent/tools", requireAuth, (req, res) => {
-  const registry = new ToolRegistry({ ai: null, workspaceRoot: process.cwd() });
+  const registry = new ToolRegistry({
+    ai: null,
+    workspaceRoot: process.cwd(),
+    memory: getMemoryService(),
+  });
   res.json({
     tools: registry.list().map((tool) => ({
       name: tool.name,
@@ -1216,7 +1297,11 @@ app.post("/api/agent/act", requireAuth, asyncHandler(async (req, res) => {
 
   const aiClient = getAI();
   const persona = resolvePersona(personaId);
-  const registry = new ToolRegistry({ ai: aiClient, workspaceRoot: process.cwd() });
+  const registry = new ToolRegistry({
+    ai: aiClient,
+    workspaceRoot: process.cwd(),
+    memory: getMemoryService(),
+  });
 
   const approved = new Set<string>(Array.isArray(approvedTools) ? approvedTools : []);
   const pendingConfirmations: Array<{ name: string; args: Record<string, unknown>; reason: string }> = [];
@@ -1265,6 +1350,92 @@ app.post("/api/agent/act", requireAuth, asyncHandler(async (req, res) => {
     pendingConfirmations,
     timestamp: new Date().toISOString(),
   });
+}));
+
+// ============================================================================
+// Memory API (Phase 3)
+//
+// All routes are scoped to the authenticated Firebase uid. Embeddings are
+// generated and ranked server-side; the browser never downloads the corpus.
+// ============================================================================
+
+app.post("/api/memory/remember", requireAuth, asyncHandler(async (req, res) => {
+  const { text, tags } = req.body ?? {};
+  if (!text || typeof text !== 'string') {
+    return res.status(400).json({ error: 'text is required', code: 'bad_request' });
+  }
+
+  const userId = req.user!.uid;
+  const record = await getMemoryService().remember(userId, text, Array.isArray(tags) ? tags : []);
+  res.json({
+    status: 'stored',
+    id: record.id,
+    text: record.text,
+    tagged: record.tags,
+    embedded: record.embedding.length > 0,
+    backend: getMemoryService().backend,
+  });
+}));
+
+app.post("/api/memory/recall", requireAuth, asyncHandler(async (req, res) => {
+  const { query, topK } = req.body ?? {};
+  if (!query || typeof query !== 'string') {
+    return res.status(400).json({ error: 'query is required', code: 'bad_request' });
+  }
+
+  const userId = req.user!.uid;
+  const scored = await getMemoryService().recall(userId, query, {
+    topK: Number.isFinite(Number(topK)) ? Number(topK) : 5,
+  });
+
+  res.json({
+    query,
+    matches: scored.map((s) => ({
+      id: s.record.id,
+      text: s.record.text,
+      score: Number(s.score.toFixed(4)),
+      method: s.lexical ? 'lexical' : 'embedding',
+      tags: s.record.tags,
+      createdAt: s.record.createdAt,
+    })),
+    backend: getMemoryService().backend,
+  });
+}));
+
+app.delete("/api/memory/:id", requireAuth, asyncHandler(async (req, res) => {
+  const deleted = await getMemoryService().forget(req.user!.uid, req.params.id);
+  res.status(deleted ? 200 : 404).json({ status: deleted ? 'forgotten' : 'not_found' });
+}));
+
+app.get("/api/memory/profile", requireAuth, asyncHandler(async (req, res) => {
+  const profile = await getMemoryService().getProfile(req.user!.uid);
+  res.json({ profile, backend: getMemoryService().backend });
+}));
+
+app.put("/api/memory/profile", requireAuth, asyncHandler(async (req, res) => {
+  const { preferredName, timezone, facts, quietHours } = req.body ?? {};
+  const profile = await getMemoryService().updateProfile(req.user!.uid, {
+    preferredName,
+    timezone,
+    facts: Array.isArray(facts) ? facts : undefined,
+    quietHours,
+  });
+  res.json({ status: 'updated', profile });
+}));
+
+app.get("/api/memory/episodes", requireAuth, asyncHandler(async (req, res) => {
+  const limit = Number.isFinite(Number(req.query.limit)) ? Number(req.query.limit) : 10;
+  const episodes = await getMemoryService().recentEpisodes(req.user!.uid, limit);
+  res.json({ episodes, backend: getMemoryService().backend });
+}));
+
+app.post("/api/memory/episodes", requireAuth, asyncHandler(async (req, res) => {
+  const { summary } = req.body ?? {};
+  if (!summary || typeof summary !== 'string') {
+    return res.status(400).json({ error: 'summary is required', code: 'bad_request' });
+  }
+  const episode = await getMemoryService().recordEpisode(req.user!.uid, summary);
+  res.json({ status: 'recorded', episode });
 }));
 
 // --- Unknown API route handler ---

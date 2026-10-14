@@ -77,6 +77,13 @@ describe('auth gating', () => {
     ['POST', '/api/voice/converse/stream'],
     ['GET', '/api/agent/tools'],
     ['POST', '/api/agent/act'],
+    ['POST', '/api/memory/remember'],
+    ['POST', '/api/memory/recall'],
+    ['GET', '/api/memory/profile'],
+    ['PUT', '/api/memory/profile'],
+    ['GET', '/api/memory/episodes'],
+    ['POST', '/api/memory/episodes'],
+    ['DELETE', '/api/memory/mem_123'],
   ];
 
   it.each(protectedRoutes)('%s %s requires a bearer token', async (method, path) => {

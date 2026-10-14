@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { ToolRegistry, resolveSafePath } from '../src/server/tools/registry';
+import { MemoryService } from '../src/server/memory/service';
+import { InMemoryMemoryStore } from '../src/server/memory/inMemoryStore';
 
 const ROOT = '/workspace';
 
@@ -118,5 +120,57 @@ describe('ToolRegistry', () => {
     const result = await registry.get('list_files')!.execute({ path: '.' }, { workspaceRoot: ROOT, dryRun: false });
     expect(result.ok).toBe(true);
     expect(Array.isArray(result.data)).toBe(true);
+  });
+});
+
+describe('ToolRegistry memory tools', () => {
+  it('omits memory tools when no memory service is supplied', () => {
+    const names = new ToolRegistry({ ai: null, workspaceRoot: ROOT }).list().map((t) => t.name);
+    expect(names).not.toContain('remember');
+    expect(names).not.toContain('recall');
+  });
+
+  it('fails honestly when there is no authenticated user', async () => {
+    const memory = new MemoryService({ store: new InMemoryMemoryStore(), embedder: null });
+    const withMemory = new ToolRegistry({ ai: null, workspaceRoot: ROOT, memory });
+
+    const result = await withMemory
+      .get('remember')!
+      .execute({ text: 'a fact' }, { workspaceRoot: ROOT, dryRun: false });
+
+    expect(result.ok).toBe(false);
+    expect(result.summary).toContain('authenticated user');
+  });
+
+  it('stores and recalls a fact for the authenticated user', async () => {
+    const memory = new MemoryService({ store: new InMemoryMemoryStore(), embedder: null });
+    const withMemory = new ToolRegistry({ ai: null, workspaceRoot: ROOT, memory });
+    const context = { workspaceRoot: ROOT, dryRun: false, userId: 'u1' };
+
+    const stored = await withMemory.get('remember')!.execute({ text: 'Prefers brevity' }, context);
+    expect(stored.ok).toBe(true);
+
+    const recalled = await withMemory.get('recall')!.execute({ query: 'brevity' }, context);
+    expect(recalled.ok).toBe(true);
+    expect(recalled.summary).toContain('brevity');
+  });
+
+  it('reports an empty recall honestly', async () => {
+    const memory = new MemoryService({ store: new InMemoryMemoryStore(), embedder: null });
+    const withMemory = new ToolRegistry({ ai: null, workspaceRoot: ROOT, memory });
+
+    const recalled = await withMemory
+      .get('recall')!
+      .execute({ query: 'nothing here' }, { workspaceRoot: ROOT, dryRun: false, userId: 'u1' });
+
+    expect(recalled.ok).toBe(true);
+    expect(recalled.summary).toContain('No stored memories');
+  });
+
+  it('keeps memory tools non-destructive (user-scoped and reversible)', () => {
+    const memory = new MemoryService({ store: new InMemoryMemoryStore(), embedder: null });
+    const withMemory = new ToolRegistry({ ai: null, workspaceRoot: ROOT, memory });
+    expect(withMemory.destructiveToolNames()).not.toContain('remember');
+    expect(withMemory.destructiveToolNames()).not.toContain('recall');
   });
 });

@@ -23,7 +23,6 @@ import {
 } from 'lucide-react';
 import { ChatMessage, Emotion, SpeechViseme } from '../types';
 import { signInWithGoogle, initAuth, auth, authenticatedFetch, getFreshIdToken } from '../lib/firebase';
-import { saveToMemory, retrieveContext } from '../lib/memory';
 import { VisionManager, VisionManagerHandle } from './VisionManager';
 import { voiceHotkeyEngine } from '../lib/voiceHotkeyEngine';
 import { jarvisVoice } from '../lib/jarvisVoice';
@@ -343,12 +342,10 @@ export function ChatInterface({
     onMicroExpressionChange?.('brow_furrow');
 
     try {
+      // Memory retrieval now happens server-side (Phase 3): the server embeds
+      // the query, ranks stored memories and injects the profile. The browser no
+      // longer downloads the corpus to score it.
       const uid = auth.currentUser?.uid;
-      
-      let memoryContext = "";
-      if (uid) {
-        memoryContext = await retrieveContext(uid, text, currentToken);
-      }
 
       // If vision is active, capture real-time webcam frame of the user/room
       let imageBase64: string | null = null;
@@ -376,7 +373,6 @@ export function ChatInterface({
         const fullReply = await jarvisVoice.converse({
           message: text,
           imageBase64: imageBase64 || undefined,
-          memoryContext,
           voice: SOFTNESS_PRESETS[selectedPreset].voice,
           persona: activePersona?.id,
           fetchImpl: authenticatedFetch,
@@ -401,9 +397,6 @@ export function ChatInterface({
         onMicroExpressionChange?.('eye_widening');
         setTimeout(() => onMicroExpressionChange?.('none'), 450);
 
-        if (uid) {
-          saveToMemory(uid, `User: ${text} | Assistant: ${fullReply}`, currentToken);
-        }
       } else {
         // Muted: fetch the reply as text only.
         const res = await authenticatedFetch('/api/chat', {
@@ -412,7 +405,6 @@ export function ChatInterface({
           body: JSON.stringify({
             message: text,
             token: workspaceToken,
-            memoryContext,
             imageBase64,
           }),
         });
@@ -434,9 +426,6 @@ export function ChatInterface({
         }]);
         onEmotionChange(typedEmotion);
 
-        if (uid) {
-          saveToMemory(uid, `User: ${text} | Assistant: ${data.reply}`, currentToken);
-        }
       }
     } catch (err: any) {
       console.warn("Chat interaction notice:", err);

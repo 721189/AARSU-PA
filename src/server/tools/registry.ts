@@ -12,6 +12,7 @@ import path from 'node:path';
 import { GoogleGenAI } from '@google/genai';
 import { MODELS } from '../models';
 import { iotBridge } from '../iotBridge';
+import type { MemoryService } from '../memory/service';
 import type { ToolDefinition, ToolParameter, ToolResult } from './types';
 
 /**
@@ -53,16 +54,20 @@ function toGeminiParameters(parameters: readonly ToolParameter[]) {
 export interface ToolRegistryOptions {
   ai?: GoogleGenAI | null;
   workspaceRoot: string;
+  /** When provided, the model gains `remember` and `recall` tools. */
+  memory?: MemoryService | null;
 }
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition>();
   private readonly workspaceRoot: string;
   private readonly ai: GoogleGenAI | null;
+  private readonly memory: MemoryService | null;
 
   constructor(options: ToolRegistryOptions) {
     this.workspaceRoot = options.workspaceRoot;
     this.ai = options.ai ?? null;
+    this.memory = options.memory ?? null;
 
     for (const tool of this.buildTools()) {
       this.tools.set(tool.name, tool);
@@ -98,7 +103,7 @@ export class ToolRegistry {
       description:
         'Returns real host telemetry: platform, CPU model and count, memory, load average, process uptime and Node version. Use this whenever the user asks about system health, resources or performance.',
       parameters: [],
-      async execute(): Promise<ToolResult> {
+      execute: async (): Promise<ToolResult> => {
         const os = await import('node:os');
         const memory = process.memoryUsage();
         const data = {
@@ -132,7 +137,7 @@ export class ToolRegistry {
       parameters: [
         { name: 'path', type: 'string', description: 'Relative directory path, e.g. "src" or "."', required: true },
       ],
-      async execute(args, context): Promise<ToolResult> {
+      execute: async (args, context): Promise<ToolResult> => {
         const target = resolveSafePath(context.workspaceRoot, String(args.path ?? '.'));
         if (!target) {
           return { ok: false, summary: 'Path is outside the workspace sandbox and was refused.' };
@@ -158,7 +163,7 @@ export class ToolRegistry {
       parameters: [
         { name: 'path', type: 'string', description: 'Relative file path inside the workspace', required: true },
       ],
-      async execute(args, context): Promise<ToolResult> {
+      execute: async (args, context): Promise<ToolResult> => {
         const target = resolveSafePath(context.workspaceRoot, String(args.path ?? ''));
         if (!target) {
           return { ok: false, summary: 'Path is outside the workspace sandbox and was refused.' };
@@ -183,7 +188,7 @@ export class ToolRegistry {
       parameters: [
         { name: 'query', type: 'string', description: 'The question or search query', required: true },
       ],
-      async execute(args): Promise<ToolResult> {
+      execute: async (args): Promise<ToolResult> => {
         if (!this.ai) {
           return { ok: false, summary: 'Web search is unavailable: Gemini is not configured.' };
         }
@@ -217,7 +222,7 @@ export class ToolRegistry {
       parameters: [
         { name: 'prompt', type: 'string', description: 'The computation or algorithm to perform', required: true },
       ],
-      async execute(args): Promise<ToolResult> {
+      execute: async (args): Promise<ToolResult> => {
         if (!this.ai) {
           return { ok: false, summary: 'Code execution is unavailable: Gemini is not configured.' };
         }
@@ -243,7 +248,7 @@ export class ToolRegistry {
         { name: 'path', type: 'string', description: 'Relative file path inside the workspace', required: true },
         { name: 'content', type: 'string', description: 'Full file content to write', required: true },
       ],
-      async execute(args, context): Promise<ToolResult> {
+      execute: async (args, context): Promise<ToolResult> => {
         const target = resolveSafePath(context.workspaceRoot, String(args.path ?? ''));
         if (!target) {
           return { ok: false, summary: 'Path is outside the workspace sandbox and was refused.' };
@@ -270,7 +275,7 @@ export class ToolRegistry {
         { name: 'deviceId', type: 'string', description: 'Device id, e.g. dev_light_lab', required: true },
         { name: 'state', type: 'object', description: 'Key/value pairs to set, e.g. { "power": false }', required: true },
       ],
-      async execute(args): Promise<ToolResult> {
+      execute: async (args): Promise<ToolResult> => {
         try {
           const updated = iotBridge.updateDeviceState(String(args.deviceId), args.state ?? {});
           return {
@@ -292,8 +297,74 @@ export class ToolRegistry {
       this.readFile(),
       this.webSearch(),
       this.runCode(),
+      ...(this.memory ? [this.remember(), this.recall()] : []),
       this.writeFile(),
       this.controlDevice(),
     ];
+  }
+
+  // --- memory tools ---------------------------------------------------------
+  //
+  // `remember` writes to the caller's *own* memory and is trivially reversible
+  // (DELETE /api/memory/:id), so it is deliberately not gated behind the
+  // destructive-action confirmation that guards filesystem and hardware writes.
+
+  private remember(): ToolDefinition {
+    return {
+      name: 'remember',
+      description:
+        'Stores a durable fact about the user for future sessions: a preference, a project, a name, a constraint. Use it when the user says to remember something or states a lasting fact.',
+      parameters: [
+        { name: 'text', type: 'string', description: 'The fact to remember, written as a standalone sentence', required: true },
+        { name: 'tags', type: 'object', description: 'Optional list of tags, e.g. ["preference"]' },
+      ],
+      execute: async (args, context): Promise<ToolResult> => {
+        if (!this.memory) {
+          return { ok: false, summary: 'Memory is unavailable on this server.' };
+        }
+        if (!context.userId) {
+          return { ok: false, summary: 'Cannot store memory without an authenticated user.' };
+        }
+        const tags = Array.isArray(args.tags) ? args.tags.map(String) : [];
+        const record = await this.memory.remember(context.userId, String(args.text ?? ''), tags);
+        return {
+          ok: true,
+          summary: `Stored memory ${record.id}.`,
+          data: { id: record.id, embedded: record.embedding.length > 0 },
+        };
+      },
+    };
+  }
+
+  private recall(): ToolDefinition {
+    return {
+      name: 'recall',
+      description:
+        'Searches the user\'s stored memories for anything relevant to a query. Use it before answering questions about the user\'s preferences, projects or history.',
+      parameters: [
+        { name: 'query', type: 'string', description: 'What to look for', required: true },
+      ],
+      execute: async (args, context): Promise<ToolResult> => {
+        if (!this.memory) {
+          return { ok: false, summary: 'Memory is unavailable on this server.' };
+        }
+        if (!context.userId) {
+          return { ok: false, summary: 'Cannot recall memories without an authenticated user.' };
+        }
+        const matches = await this.memory.recall(context.userId, String(args.query ?? ''), { topK: 5 });
+        if (matches.length === 0) {
+          return { ok: true, summary: 'No stored memories matched.' };
+        }
+        return {
+          ok: true,
+          summary: matches.map((m) => m.record.text).join(' | '),
+          data: matches.map((m) => ({
+            text: m.record.text,
+            score: Number(m.score.toFixed(3)),
+            method: m.lexical ? 'lexical' : 'embedding',
+          })),
+        };
+      },
+    };
   }
 }
