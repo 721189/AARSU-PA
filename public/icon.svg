@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="J.A.R.V.I.S.">
+  <defs>
+    <radialGradient id="core" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e0f7ff"/>
+      <stop offset="45%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#0e7490"/>
+    </radialGradient>
+    <linearGradient id="ring" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67e8f9"/>
+      <stop offset="100%" stop-color="#0369a1"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="96" fill="#020617"/>
+
+  <!-- Arc reactor rings -->
+  <circle cx="256" cy="256" r="176" fill="none" stroke="url(#ring)" stroke-width="6" opacity="0.75"/>
+  <circle cx="256" cy="256" r="140" fill="none" stroke="#22d3ee" stroke-width="3"
+          stroke-dasharray="18 14" opacity="0.8"/>
+  <circle cx="256" cy="256" r="104" fill="none" stroke="#38bdf8" stroke-width="2" opacity="0.5"/>
+
+  <!-- Triangular reactor core -->
+  <polygon points="256,168 332,300 180,300" fill="none" stroke="#a5f3fc" stroke-width="8"
+           stroke-linejoin="round"/>
+  <circle cx="256" cy="256" r="54" fill="url(#core)"/>
+</svg>

@@ -1,0 +1,26 @@
+{
+  "name": "Aarsu — J.A.R.V.I.S. Command Core",
+  "short_name": "J.A.R.V.I.S.",
+  "description": "A holographic assistant with Gemini voice, grounded search, tool use and durable memory.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#020617",
+  "theme_color": "#06b6d4",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
