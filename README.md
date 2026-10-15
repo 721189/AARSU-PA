@@ -22,16 +22,22 @@ Google Workspace.
 
 | Area | State |
 |---|---|
-| Build, type-check, tests | ✅ green (`npm run lint`, `npm test`, `npm run build`) |
+| Build, type-check, tests | ✅ green — `npm run lint`, `npm test` (325 tests), `npm run build` |
 | Gemini chat, grounding, code execution | ✅ real |
-| Google Workspace (Calendar/Drive/Gmail) | ✅ real, via a client-supplied OAuth token (see Security) |
-| 3D HUD, WebAudio cues, webcam vision for chat | ✅ real |
-| Voice input/output | ⚠️ browser `speechSynthesis` / `webkitSpeechRecognition` — not the Gemini Live API |
-| Wake word | ⚠️ substring match on the transcript, not a wake-word engine |
-| IoT devices, biometrics, D3 telemetry chart, knowledge graph, "reinforcement learning" | ⚠️ **simulated** — in-process mock data, labelled as such in the UI where possible |
-| MCP hub | ⚠️ a REST façade shaped like MCP; not the Model Context Protocol |
-| Multi-agent "Iron Legion" | ⚠️ three parallel Gemini prompts with a real retry, no planner/verifier |
-| Proactive daemon | ⚠️ interval loop over mock telemetry |
+| **Voice** | ✅ **Gemini TTS (`gemini-3.8-flash-tts`) streamed sentence-by-sentence; Live API ephemeral tokens; real wake word at utterance start; instant barge-in** |
+| **Agency** | ✅ **native function calling with a real tool loop and a confirmation gate for anything that changes state** |
+| **Memory** | ✅ **server-side embeddings + ranking, structured user profile, episodic recall; Firestore-backed when configured, otherwise an explicitly non-durable store** |
+| **Perception** | ✅ **real camera (`getUserMedia`) and screen (`getDisplayMedia`) capture, with a kill switch** |
+| **Proactivity** | ✅ **relevance-scored alerts over real host telemetry, with quiet hours, focus mode and de-duplication** |
+| **MCP** | ✅ **a real Model Context Protocol server (JSON-RPC 2.0, `initialize`, `tools/*`, `resources/*`)** |
+| **Workspace auth** | ✅ **OAuth authorisation-code flow; refresh tokens stay server-side and never reach the browser** |
+| **Devices** | ✅ **Home Assistant adapter when configured; the simulated facility is flagged `simulated: true` everywhere** |
+| **Deploy** | ✅ **multi-stage Dockerfile, CSP, CORS allow-list, split rate limits, readiness probe, graceful shutdown, installable PWA** |
+| Biometrics, arc-reactor power gauge, "reinforcement learning" | ⚠️ still **simulated** — see [`docs/JARVIS_AUDIT.md`](docs/JARVIS_AUDIT.md) |
+
+Everything above was implemented and verified in this repo; see
+[`docs/JARVIS_BUILD_PLAN.md`](docs/JARVIS_BUILD_PLAN.md) for the phase-by-phase record and for
+what still needs live credentials to exercise end to end.
 
 ## Architecture
 
@@ -63,8 +69,13 @@ npm run dev                 # http://localhost:3000
 |---|---|---|
 | `GEMINI_API_KEY` | yes | All Gemini calls |
 | `PORT` | no | Defaults to `3000` |
-| `APP_URL` | no | Self-referential links / OAuth callbacks |
-| `VITE_OAUTH_CLIENT_ID` | no | Google Workspace OAuth (falls back to `firebase-applet-config.json`) |
+| `APP_URL` | no | Self-origin, used for the CORS allow-list |
+| `CORS_ORIGINS` | no | Comma-separated extra allowed origins |
+| `TRUST_PROXY_HOPS` | no | Proxy hop count for `X-Forwarded-For` (default `1`) |
+| `JARVIS_PERSONA` | no | `jarvis` (default) or `aarsu` |
+| `OAUTH_CLIENT_ID` / `OAUTH_CLIENT_SECRET` / `OAUTH_REDIRECT_URI` | no | Enables Google Workspace connect |
+| `HOME_ASSISTANT_URL` / `HOME_ASSISTANT_TOKEN` | no | Enables real device control |
+| `VITE_OAUTH_CLIENT_ID` | no | Falls back to `firebase-applet-config.json` |
 
 ### Scripts
 
@@ -100,8 +111,19 @@ All routes except `/api/health` require `Authorization: Bearer <firebase-id-toke
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/api/health` | Per-dependency health (no auth) |
+| `GET` | `/api/ready` | Readiness probe (no auth) |
 | `POST` | `/api/chat` | Conversational reply with emotion tag |
 | `POST` | `/api/embed` | Text embedding (`gemini-embedding-001`) |
+| **`GET`** | **`/api/voice/voices`** | **Available Gemini TTS voices + active persona** |
+| **`POST`** | **`/api/voice/tts`** | **One-shot synthesis → playable WAV** |
+| **`POST`** | **`/api/voice/tts/stream`** | **Streaming synthesis (SSE, raw PCM)** |
+| **`POST`** | **`/api/voice/converse/stream`** | **Text *and* speech in one streamed turn** |
+| **`POST`** | **`/api/voice/live-token`** | **Ephemeral Live API token (single-use)** |
+| **`GET`** | **`/api/agent/tools`** | **Registered tools + which need confirmation** |
+| **`POST`** | **`/api/agent/act`** | **Run an objective through the tool loop** |
+| **`GET`/`POST`** | **`/api/memory/*`** | **remember / recall / profile / episodes** |
+| **`POST`** | **`/api/mcp`** | **Real MCP endpoint (JSON-RPC 2.0)** |
+| **`GET`/`POST`/`DELETE`** | **`/api/workspace/*`** | **Connect / status / disconnect Workspace** |
 | `POST` | `/api/proactive` | Calendar/Drive/Gmail proactive suggestions |
 | `POST` | `/api/jarvis/search` | Google Search grounding with citations |
 | `POST` | `/api/jarvis/maps` | Google Maps grounding |
@@ -111,10 +133,11 @@ All routes except `/api/health` require `Authorization: Bearer <firebase-id-toke
 | `POST` | `/api/jarvis/generate-3d-image` | Image generation |
 | `POST` | `/api/agent/run` | Structured autonomous task run |
 | `GET` | `/api/jarvis/graph` | Associative knowledge graph (in-memory) |
-| `GET`/`POST` | `/api/jarvis/iot/*` | Simulated facility devices |
+| `GET`/`POST` | `/api/jarvis/iot/*` | Devices (Home Assistant or simulated) |
 | `GET`/`POST` | `/api/jarvis/biometrics` | Simulated biometric telemetry |
+| `GET`/`POST`/`DELETE`/`PUT` | `/api/jarvis/proactive/*` | Alert feed, tick, interruption policy |
 | `GET` | `/api/jarvis/host/diagnostics` | Real host OS telemetry |
-| `GET`/`POST` | `/api/mcp/*` | MCP-shaped tool + resource façade |
+| `GET` | `/api/mcp/tools`, `/api/mcp/resources` | REST adapter for the in-app inspector |
 
 ## Models
 
@@ -128,13 +151,31 @@ source of truth. Do not inline model IDs.
 | Embeddings | `gemini-embedding-001` |
 | Image generation | `imagen-4.0-generate-001` |
 
-## Security notes (known gaps)
+## Security notes
 
-- The Google Workspace OAuth access token is currently sent in the request **body**
-  for `/api/chat` and `/api/proactive`. Moving this server-side is Phase 6 of the plan.
-- CORS is currently unrestricted and CSP is disabled for local Vite HMR.
-- `firebase-applet-config.json` contains client-side Firebase credentials (expected to
-  be public for a web app, but they should be injected via env rather than committed).
+- Google Workspace credentials are held **server-side** (authorisation-code flow);
+  no Google access token is ever sent to or from the browser.
+- CORS is an explicit allow-list derived from `APP_URL` / `CORS_ORIGINS`. With neither
+  set in production, cross-origin browser requests are refused.
+- CSP is enabled in production (`script-src 'self'`, `frame-ancestors 'none'`,
+  `connect-src` limited to self plus the Gemini endpoints).
+- Rate limits are split by cost: 600/15 min general, 80/15 min on AI routes, 240/min on
+  read-only telemetry.
+- Destructive tools require explicit confirmation and **cannot be reached over MCP**,
+  because an external client cannot satisfy the interactive gate.
+- Filesystem tools are sandboxed to the workspace root; traversal and
+  prefix-sibling escapes are rejected.
+
+## Deployment
+
+```bash
+docker build -t aarsu-jarvis .
+docker run -p 3000:3000 -e GEMINI_API_KEY=... -e APP_URL=https://your-host aarsu-jarvis
+```
+
+The image runs as a non-root user and ships a `HEALTHCHECK` against `/api/health`.
+`/api/ready` is the readiness probe; `/api/health` reports per-dependency status
+(including whether the memory backend is durable) and returns 503 when something is down.
 
 ## Testing
 

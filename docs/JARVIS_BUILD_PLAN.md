@@ -4,6 +4,38 @@
 
 ---
 
+## Implementation status (updated 2026-10-15)
+
+| Phase | Scope | Status | Tests |
+|---|---|---|---|
+| **0** | Stabilise & tell the truth | ✅ **done** | 34 |
+| **1** | The voice — Gemini TTS, Live API, streaming, wake word | ✅ **done** | +56 |
+| **2** | Agency — function calling, tool loop, confirmation gate | ✅ **done** | +34 |
+| **3** | Memory & identity — durable store, profile, episodes | ✅ **done** | +54 |
+| **4** | Perception — real camera/screen capture | ✅ **done** | +8 |
+| **5** | Proactivity — scoring, quiet hours, de-duplication | ✅ **done** | +35 |
+| **6** | Real integrations — MCP protocol, server-side OAuth, IoT adapters | ✅ **done** | +49 |
+| **7** | Everywhere — installable PWA, offline shell | ✅ **done** | — |
+| **8** | Hardening — CORS/CSP, rate limits, Docker, graceful shutdown | ✅ **done** | +2 |
+| | **Total** | | **325 passing** |
+
+**Verified in this environment:** `tsc --noEmit` clean · `vitest run` 325/325 · `npm run build` clean ·
+production server boots, serves the SPA, returns JSON 404s for unknown API routes, applies CSP,
+enforces the CORS allow-list, reports readiness, and shuts down gracefully on SIGTERM.
+
+**What still requires external credentials to exercise end-to-end** (code complete, not
+verifiable without a live key/account): the Gemini Live API session, Gemini TTS audio,
+Firestore-backed memory, Google Workspace OAuth, and Home Assistant device control.
+
+**Deliberately NOT done** (declared, not faked): calendar/email push subscriptions (Phase 5.1)
+need server-side OAuth plus a public webhook, so `WorkspaceEventSource` exists as a declared
+interface but is not registered. Third-party connectors (GitHub/Slack/Notion) likewise.
+
+**Still open from the plan:** Phase 7.2–7.4 (always-on background audio, device handoff, native
+wrapper) and Phase 8.2/8.6 (OpenTelemetry traces, Playwright E2E) are not implemented.
+
+---
+
 ## How to read this plan
 
 - **Phases are ordered by *perceived JARVIS-ness per unit of work*, not by technical tidiness.** Phase 1 (voice) will change how the app feels more than everything else combined, so it comes before "proper" things like a database.
