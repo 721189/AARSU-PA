@@ -13,7 +13,6 @@ import { jarvisGraph } from "./src/lib/knowledgeGraph";
 import { redisCache } from "./src/server/redisCache";
 import { dbService } from "./src/server/dbService";
 import { iotBridge } from "./src/server/iotBridge";
-import { mcpServer } from "./src/server/mcpServer";
 import { reinforcementScheduler } from "./src/server/reinforcementScheduler";
 import {
   MODELS,
@@ -36,6 +35,8 @@ import { ToolRegistry } from "./src/server/tools/registry";
 import { runToolLoop } from "./src/server/tools/toolLoop";
 import { createGeminiModelCaller } from "./src/server/tools/geminiCaller";
 import { proactiveService } from "./src/server/proactive/service";
+import { createMcpProtocol, MCP_RESOURCES } from "./src/server/mcp/server";
+import { LATEST_PROTOCOL_VERSION } from "./src/server/mcp/protocol";
 import { SystemTelemetrySource } from "./src/server/proactive/sources";
 import { createMemoryStore } from "./src/server/memory";
 import { MemoryService, createGeminiEmbedder } from "./src/server/memory/service";
@@ -1010,39 +1011,134 @@ app.get("/api/jarvis/reinforcement/metrics", requireAuth, (req, res) => {
 });
 
 
-// --- Model Context Protocol (MCP) Endpoints ---
-app.get("/api/mcp/tools", requireAuth, (req, res) => {
-  res.json({ tools: mcpServer.listTools() });
-});
+// ============================================================================
+// Model Context Protocol (Phase 6)
+//
+// POST /api/mcp is a real MCP endpoint: JSON-RPC 2.0 with an `initialize`
+// handshake, protocol-version negotiation, tools/list, tools/call and
+// resources/list + resources/read. Any MCP client (Claude Desktop, an IDE,
+// another agent) can connect to it.
+//
+// The /api/mcp/* REST routes below are a thin adapter over the SAME registry and
+// resources, kept so the in-app inspector keeps working. They are not the
+// protocol.
+// ============================================================================
 
-app.post("/api/mcp/tools/call", requireAuth, async (req, res) => {
-  const { name, arguments: toolArgs } = req.body;
-  if (!name) return res.status(400).json({ error: "Tool name required" });
-
+/** Returns the Gemini client, or null when unconfigured (rather than throwing). */
+function safeGetAI(): GoogleGenAI | null {
   try {
-    const aiClient = getAI();
-    mcpServer.setAIClient(aiClient);
-  } catch {}
+    return getAI();
+  } catch {
+    return null;
+  }
+}
 
-  const result = await mcpServer.callTool(name, toolArgs || {});
-  res.json(result);
+function buildToolRegistry(): ToolRegistry {
+  return new ToolRegistry({
+    ai: safeGetAI(),
+    workspaceRoot: process.cwd(),
+    memory: getMemoryService(),
+  });
+}
+
+function mcpContext(req: express.Request) {
+  return {
+    userId: req.user?.uid,
+    workspaceRoot: process.cwd(),
+    dryRun: false,
+  };
+}
+
+app.post("/api/mcp", requireAuth, asyncHandler(async (req, res) => {
+  const protocol = createMcpProtocol({
+    workspaceRoot: process.cwd(),
+    buildRegistry: buildToolRegistry,
+    buildContext: () => mcpContext(req),
+  });
+
+  const response = await protocol.handleRaw(JSON.stringify(req.body ?? {}));
+  // A JSON-RPC notification has no response by definition.
+  if (response === null) return res.status(202).end();
+  res.json(response);
+}));
+
+app.get("/api/mcp", requireAuth, (req, res) => {
+  res.status(405).json({
+    jsonrpc: '2.0',
+    id: null,
+    error: {
+      code: -32600,
+      message: 'This transport accepts JSON-RPC over POST only; server-sent events are not enabled.',
+    },
+  });
 });
+
+// --- Legacy REST adapter (kept for the in-app inspector) ---
+app.get("/api/mcp/tools", requireAuth, (req, res) => {
+  const registry = buildToolRegistry();
+  res.json({
+    tools: registry.list().map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      destructive: Boolean(tool.destructive),
+      inputSchema: {
+        type: 'object',
+        properties: Object.fromEntries(
+          tool.parameters.map((param) => [param.name, { type: param.type, description: param.description }])
+        ),
+        required: tool.parameters.filter((param) => param.required).map((param) => param.name),
+      },
+    })),
+    protocolVersion: LATEST_PROTOCOL_VERSION,
+    transport: 'json-rpc-over-http',
+  });
+});
+
+app.post("/api/mcp/tools/call", requireAuth, asyncHandler(async (req, res) => {
+  const { name, arguments: toolArgs } = req.body ?? {};
+  if (!name) return res.status(400).json({ error: 'Tool name required', code: 'bad_request' });
+
+  const tool = buildToolRegistry().get(name);
+  if (!tool) return res.status(404).json({ error: `Unknown tool: ${name}`, code: 'not_found' });
+
+  if (tool.destructive) {
+    return res.status(403).json({
+      error: `"${name}" changes state and requires interactive confirmation, which this endpoint cannot provide.`,
+      code: 'forbidden',
+    });
+  }
+
+  const result = await tool.execute(toolArgs ?? {}, mcpContext(req));
+  res.json({ content: [{ type: 'text', text: result.summary }], isError: !result.ok });
+}));
 
 app.get("/api/mcp/resources", requireAuth, (req, res) => {
-  res.json({ resources: mcpServer.listResources() });
+  res.json({ resources: MCP_RESOURCES });
 });
 
-app.post("/api/mcp/resources/read", requireAuth, (req, res) => {
-  const { uri } = req.body;
-  if (!uri) return res.status(400).json({ error: "Resource URI required" });
+app.post("/api/mcp/resources/read", requireAuth, asyncHandler(async (req, res) => {
+  const { uri } = req.body ?? {};
+  if (!uri) return res.status(400).json({ error: 'Resource URI required', code: 'bad_request' });
 
-  try {
-    const result = mcpServer.readResource(uri);
-    res.json(result);
-  } catch (err: any) {
-    res.status(404).json({ error: err.message });
+  const protocol = createMcpProtocol({
+    workspaceRoot: process.cwd(),
+    buildRegistry: buildToolRegistry,
+    buildContext: () => mcpContext(req),
+  });
+
+  const response = await protocol.handle({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'resources/read',
+    params: { uri },
+  });
+
+  if (!response || 'error' in response) {
+    const message = response && 'error' in response ? response.error.message : 'Unknown resource';
+    return res.status(404).json({ error: message, code: 'not_found' });
   }
-});
+  res.json(response.result);
+}));
 
 // ============================================================================
 // Voice API
@@ -1491,10 +1587,7 @@ app.use((err: unknown, req: express.Request, res: express.Response, _next: expre
 
 async function startServer() {
   // Start background services.
-  try {
-    const aiClient = getAI();
-    mcpServer.setAIClient(aiClient);
-  } catch {}
+  // (The Gemini client is resolved lazily per request via safeGetAI().)
 
   // Proactive pipeline: only real signal sources are registered. Calendar and
   // email sources stay unregistered until server-side OAuth exists (Phase 6).
