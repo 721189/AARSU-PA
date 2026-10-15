@@ -12,7 +12,6 @@ import { IronLegionOrchestrator } from "./src/server/agentOrchestrator";
 import { jarvisGraph } from "./src/lib/knowledgeGraph";
 import { redisCache } from "./src/server/redisCache";
 import { dbService } from "./src/server/dbService";
-import { predictiveDaemon } from "./src/server/predictiveDaemon";
 import { iotBridge } from "./src/server/iotBridge";
 import { mcpServer } from "./src/server/mcpServer";
 import { reinforcementScheduler } from "./src/server/reinforcementScheduler";
@@ -36,6 +35,8 @@ import {
 import { ToolRegistry } from "./src/server/tools/registry";
 import { runToolLoop } from "./src/server/tools/toolLoop";
 import { createGeminiModelCaller } from "./src/server/tools/geminiCaller";
+import { proactiveService } from "./src/server/proactive/service";
+import { SystemTelemetrySource } from "./src/server/proactive/sources";
 import { createMemoryStore } from "./src/server/memory";
 import { MemoryService, createGeminiEmbedder } from "./src/server/memory/service";
 
@@ -832,12 +833,38 @@ app.get("/api/jarvis/redis/metrics", requireAuth, (req, res) => {
   res.json(redisCache.getMetrics());
 });
 
-// --- Proactive Predictive Telemetry Feed Endpoint ---
+// --- Proactive Alert Feed Endpoint ---
+// Serves alerts that passed the interruption policy (relevance threshold,
+// de-duplication, quiet hours). Not a canned string loop.
 app.get("/api/jarvis/proactive/feed", requireAuth, (req, res) => {
+  const limit = Number.isFinite(Number(req.query.limit)) ? Number(req.query.limit) : 20;
   res.json({
-    alerts: predictiveDaemon.getRecentAlerts(),
-    biometrics: dbService.getLatestBiometrics()
+    alerts: proactiveService.list(limit),
+    sources: proactiveService.sourceCount,
+    pipelineRunning: proactiveService.running,
   });
+});
+
+// Dismiss a delivered alert.
+app.delete("/api/jarvis/proactive/feed/:id", requireAuth, (req, res) => {
+  const dismissed = proactiveService.dismiss(req.params.id);
+  res.status(dismissed ? 200 : 404).json({ status: dismissed ? 'dismissed' : 'not_found' });
+});
+
+// Run one proactive poll cycle on demand.
+app.post("/api/jarvis/proactive/tick", requireAuth, asyncHandler(async (req, res) => {
+  const delivered = await proactiveService.tick();
+  res.json({ delivered: delivered.length, alerts: delivered });
+}));
+
+// Adjust the interruption policy for this session.
+app.put("/api/jarvis/proactive/policy", requireAuth, (req, res) => {
+  const { quietHours, focusMode } = req.body ?? {};
+  proactiveService.setContext({
+    quietHours: quietHours ?? null,
+    focusMode: Boolean(focusMode),
+  });
+  res.json({ status: 'updated', quietHours: quietHours ?? null, focusMode: Boolean(focusMode) });
 });
 
 // --- Biometric Telemetry Sync Endpoint ---
@@ -1463,13 +1490,16 @@ app.use((err: unknown, req: express.Request, res: express.Response, _next: expre
 });
 
 async function startServer() {
-  // Start background proactive daemon & MCP server
+  // Start background services.
   try {
     const aiClient = getAI();
-    predictiveDaemon.setAIClient(aiClient);
     mcpServer.setAIClient(aiClient);
   } catch {}
-  predictiveDaemon.start();
+
+  // Proactive pipeline: only real signal sources are registered. Calendar and
+  // email sources stay unregistered until server-side OAuth exists (Phase 6).
+  proactiveService.registerSource(new SystemTelemetrySource());
+  proactiveService.start(60_000);
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

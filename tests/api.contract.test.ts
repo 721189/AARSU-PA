@@ -84,6 +84,9 @@ describe('auth gating', () => {
     ['GET', '/api/memory/episodes'],
     ['POST', '/api/memory/episodes'],
     ['DELETE', '/api/memory/mem_123'],
+    ['DELETE', '/api/jarvis/proactive/feed/alert_1'],
+    ['POST', '/api/jarvis/proactive/tick'],
+    ['PUT', '/api/jarvis/proactive/policy'],
   ];
 
   it.each(protectedRoutes)('%s %s requires a bearer token', async (method, path) => {
