@@ -26,6 +26,8 @@ import {
   Sliders,
   Network,
   Camera,
+  Monitor,
+  ShieldAlert,
   RefreshCw
 } from 'lucide-react';
 import { Jarvis3DCore } from './Jarvis3DCore';
@@ -35,6 +37,7 @@ import { JarvisSystemsDiagnostic } from './JarvisSystemsDiagnostic';
 import { jarvisAudio } from '../lib/audioEngine';
 import { duplexVoiceEngine } from '../lib/duplexVoice';
 import { authenticatedFetch, auth, isUserAuthenticated } from '../lib/firebase';
+import { visionCapture } from '../lib/visionCapture';
 
 interface JarvisHudProps {
   token: string | null;
@@ -65,6 +68,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
   const [biometrics, setBiometrics] = useState({ heartRate: 74, stressIndex: 18, focusLevel: 94, coreTempC: 36.8 });
   const [proactiveAlerts, setProactiveAlerts] = useState<any[]>([]);
   const [visionSitrep, setVisionSitrep] = useState<string | null>(null);
+  const [captureActive, setCaptureActive] = useState(false);
 
   // IoT & Host Systems
   const [iotDevices, setIotDevices] = useState<any[]>([]);
@@ -313,6 +317,36 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
     }
   };
 
+  const refreshCaptureState = () => {
+    setCaptureActive(visionCapture.cameraActive || visionCapture.screenActive);
+  };
+
+  const toggleScreenShare = async () => {
+    jarvisAudio.playTacticalChirp(980, 70);
+    if (visionCapture.screenActive) {
+      visionCapture.stopScreen();
+      refreshCaptureState();
+      setVisionSitrep('Screen sharing stopped.');
+      return;
+    }
+    const ok = await visionCapture.startScreen();
+    refreshCaptureState();
+    setVisionSitrep(ok ? 'Screen sharing active. Ask me what is on your screen.' : 'Screen sharing was not granted.');
+  };
+
+  const toggleCamera = async () => {
+    jarvisAudio.playTacticalChirp(980, 70);
+    if (visionCapture.cameraActive) {
+      visionCapture.stopCamera();
+      refreshCaptureState();
+      setVisionSitrep('Camera stopped.');
+      return;
+    }
+    const ok = await visionCapture.startCamera();
+    refreshCaptureState();
+    setVisionSitrep(ok ? 'Camera active.' : 'Camera access was not granted.');
+  };
+
   const runVisionAnalysis = async () => {
     if (!hasAuth()) {
       setVisionSitrep("Visual neural telemetry requires authentication, Sir. Please connect with Google.");
@@ -322,42 +356,42 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
     jarvisAudio.playTacticalChirp(1100, 100);
     setLoading(true);
     setVisionSitrep(null);
+
     try {
-      const canvas = document.createElement('canvas');
-      canvas.width = 400;
-      canvas.height = 300;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.fillStyle = '#0f172a';
-        ctx.fillRect(0, 0, 400, 300);
-        ctx.strokeStyle = '#06b6d4';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(40, 40, 320, 220);
-        ctx.fillStyle = '#22d3ee';
-        ctx.font = '16px monospace';
-        ctx.fillText('TARGET ACQUIRED: PRIMARY WORKSPACE', 60, 100);
-        ctx.fillText('STATUS: SECURE 100%', 60, 130);
+      // Real capture. This previously drew a fake canvas ("TARGET ACQUIRED")
+      // and sent that to the model, so the "vision" feature never saw anything.
+      const capture = visionCapture.capture();
+      if (!capture) {
+        setVisionSitrep(
+          'No optical source is active, Sir. Enable the camera or share your screen first.'
+        );
+        return;
       }
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
 
       const res = await authenticatedFetch('/api/jarvis/vision/analyze', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          imageBase64: dataUrl,
-          query: "Provide a tactical visual reconnaissance assessment of the current environment and workstation."
-        })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: capture.dataUrl,
+          source: capture.source,
+          query:
+            capture.source === 'screen'
+              ? 'Describe what is on this screen. Identify the application, any visible text, errors or code, and anything that needs attention.'
+              : 'Provide a visual reconnaissance assessment of the current environment and workstation.',
+        }),
       });
+
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.error || `Vision request failed (${res.status})`);
+      }
+
       const data = await res.json();
       setVisionSitrep(data.sitrep);
-      if (data.sitrep) {
-        onVocalize?.(data.sitrep);
-      }
-    } catch (e) {
-      console.error(e);
-      setVisionSitrep("Optical telemetry uplink disrupted.");
+      if (data.sitrep) onVocalize?.(data.sitrep);
+    } catch (e: any) {
+      console.warn('Vision analysis notice:', e);
+      setVisionSitrep(`Visual telemetry failed: ${e?.message || 'unknown error'}`);
     } finally {
       setLoading(false);
     }
@@ -620,7 +654,7 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
             </button>
 
             <button
-              onClick={() => { setActiveTab('vision'); runVisionAnalysis(); jarvisAudio.playTacticalChirp(1080, 60); }}
+              onClick={() => { setActiveTab('vision'); refreshCaptureState(); runVisionAnalysis(); jarvisAudio.playTacticalChirp(1080, 60); }}
               className={`py-1.5 px-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 text-[10px] ${
                 activeTab === 'vision' ? 'bg-cyan-600/30 border border-cyan-400 text-cyan-200 shadow-sm' : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
@@ -830,38 +864,77 @@ export function JarvisHud({ token, onVocalize, isSpeaking = false }: JarvisHudPr
                 <span className="font-semibold text-cyan-300 text-[11px] flex items-center gap-1.5">
                   <Eye className="w-3.5 h-3.5 text-cyan-400" /> Continuous Optical Telemetry & Multimodal SITREP
                 </span>
-                <button
-                  onClick={runVisionAnalysis}
-                  disabled={loading}
-                  className="px-3 py-1 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-[10px] transition-all flex items-center gap-1.5 disabled:opacity-40"
-                >
-                  {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Camera className="w-3 h-3" />}
-                  <span>Scan Optical Feed</span>
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={toggleScreenShare}
+                    title="Share a screen so the assistant can read it"
+                    className={`px-2 py-1 rounded-xl border text-[10px] font-medium transition-all ${
+                      visionCapture.screenActive
+                        ? 'bg-emerald-600/30 border-emerald-400 text-emerald-200'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Monitor className="w-3 h-3 inline" /> Screen
+                  </button>
+                  <button
+                    onClick={toggleCamera}
+                    title="Enable the camera"
+                    className={`px-2 py-1 rounded-xl border text-[10px] font-medium transition-all ${
+                      visionCapture.cameraActive
+                        ? 'bg-emerald-600/30 border-emerald-400 text-emerald-200'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Camera className="w-3 h-3 inline" /> Camera
+                  </button>
+                  <button
+                    onClick={runVisionAnalysis}
+                    disabled={loading}
+                    className="px-3 py-1 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-[10px] transition-all flex items-center gap-1.5 disabled:opacity-40"
+                  >
+                    {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
+                    <span>Analyse</span>
+                  </button>
+                </div>
               </div>
 
-              {/* Optical Targeting Reticle Frame */}
-              <div className="relative bg-slate-950 border border-cyan-500/40 rounded-xl p-3 overflow-hidden flex flex-col items-center justify-center min-h-[130px]">
-                <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(6,182,212,0.12)_0%,transparent_70%)] pointer-events-none" />
-                <div className="absolute top-2 left-2 text-[9px] font-mono text-cyan-400">
-                  [ OPTICAL SENSOR: ONLINE ]
-                </div>
-                <div className="absolute top-2 right-2 text-[9px] font-mono text-emerald-400">
-                  FPS: 60 • 4K HDR • MULTIMODAL
+              {/* Real capture-source status. This panel used to claim
+                  "FPS: 60 - 4K HDR - MULTIMODAL" regardless of whether any
+                  sensor was actually running. */}
+              <div className="relative bg-slate-950 border border-cyan-500/40 rounded-xl p-3 flex flex-col items-center justify-center min-h-[110px] gap-2">
+                <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(6,182,212,0.10)_0%,transparent_70%)] pointer-events-none" />
+
+                <div className="relative w-16 h-16 border border-cyan-400/40 rounded-full flex items-center justify-center">
+                  <div className={`w-12 h-12 border border-cyan-400/60 rounded-full border-dashed ${captureActive ? 'animate-[spin_10s_linear_infinite]' : 'opacity-40'}`} />
+                  <div className={`absolute w-2 h-2 rounded-full ${captureActive ? 'bg-cyan-400 shadow-[0_0_8px_#22d3ee]' : 'bg-slate-600'}`} />
                 </div>
 
-                <div className="relative w-20 h-20 border border-cyan-400/40 rounded-full flex items-center justify-center animate-pulse">
-                  <div className="w-14 h-14 border border-cyan-400/60 rounded-full border-dashed animate-[spin_10s_linear_infinite]" />
-                  <div className="absolute w-2 h-2 bg-cyan-400 rounded-full shadow-[0_0_8px_#22d3ee]" />
-                  <div className="absolute top-0 w-0.5 h-2.5 bg-cyan-400" />
-                  <div className="absolute bottom-0 w-0.5 h-2.5 bg-cyan-400" />
-                  <div className="absolute left-0 h-0.5 w-2.5 bg-cyan-400" />
-                  <div className="absolute right-0 h-0.5 w-2.5 bg-cyan-400" />
+                <div className="font-mono text-[10px] tracking-wider text-center">
+                  <div className={captureActive ? 'text-emerald-400' : 'text-amber-400'}>
+                    {captureActive
+                      ? `OPTICAL SOURCE: ${visionCapture.screenActive ? 'SCREEN SHARE' : 'CAMERA'} ACTIVE`
+                      : 'NO OPTICAL SOURCE ACTIVE'}
+                  </div>
+                  <div className="text-slate-500 mt-0.5">
+                    {captureActive
+                      ? 'Frames are captured on demand and sent for analysis'
+                      : 'Enable Screen or Camera above to grant sight'}
+                  </div>
                 </div>
 
-                <div className="mt-2 text-[10px] text-cyan-300 font-mono tracking-wider">
-                  TARGET LOCK ACQUIRED • READY FOR SITREP
-                </div>
+                {captureActive && (
+                  <button
+                    onClick={() => {
+                      visionCapture.stopAll();
+                      refreshCaptureState();
+                      setVisionSitrep('All optical capture stopped.');
+                      jarvisAudio.playTacticalChirp(700, 90);
+                    }}
+                    className="px-3 py-1 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-500/50 text-rose-200 text-[10px] font-semibold flex items-center gap-1.5"
+                  >
+                    <ShieldAlert className="w-3 h-3" /> Stop all capture
+                  </button>
+                )}
               </div>
 
               {/* SITREP readout */}
