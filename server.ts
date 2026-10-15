@@ -39,6 +39,7 @@ import { createMcpProtocol, MCP_RESOURCES } from "./src/server/mcp/server";
 import { LATEST_PROTOCOL_VERSION } from "./src/server/mcp/protocol";
 import { SystemTelemetrySource } from "./src/server/proactive/sources";
 import { createMemoryStore } from "./src/server/memory";
+import { WorkspaceAuthService, createTokenStore } from "./src/server/workspace/auth";
 import { MemoryService, createGeminiEmbedder } from "./src/server/memory/service";
 
 // --- Memory (Phase 3) ---
@@ -93,6 +94,18 @@ async function recordTurnEpisode(userId: string | undefined, userText: string, r
   } catch (err) {
     console.warn('[memory] failed to record episode:', (err as Error)?.message);
   }
+}
+
+// --- Workspace auth (Phase 6.2) ---
+// Google Workspace credentials live server-side, keyed by Firebase uid. The
+// client sends a one-time authorisation code, never an access token.
+let workspaceAuthInstance: WorkspaceAuthService | null = null;
+
+function getWorkspaceAuth(): WorkspaceAuthService {
+  if (!workspaceAuthInstance) {
+    workspaceAuthInstance = new WorkspaceAuthService({ store: createTokenStore() });
+  }
+  return workspaceAuthInstance;
 }
 
 // --- Enterprise Security Setup ---
@@ -203,6 +216,16 @@ app.get("/api/health", async (req, res) => {
     checks.memory = { status: 'down', detail: (err as Error).message };
   }
 
+  // 5. Workspace OAuth
+  try {
+    const ws = getWorkspaceAuth();
+    checks.workspaceOAuth = ws.configured
+      ? { status: 'ok', detail: `store=${ws.backend.kind}` }
+      : { status: 'degraded', detail: 'OAUTH_CLIENT_ID / OAUTH_CLIENT_SECRET not set' };
+  } catch (err) {
+    checks.workspaceOAuth = { status: 'down', detail: (err as Error).message };
+  }
+
   const anyDown = Object.values(checks).some((c) => c.status === 'down');
   const anyDegraded = Object.values(checks).some((c) => c.status === 'degraded');
 
@@ -280,6 +303,7 @@ async function generateContentWithFallback(aiClient: GoogleGenAI, contents: any,
 app.post("/api/chat", requireAuth, async (req, res) => {
   try {
     const { message, token, imageBase64 } = req.body;
+    const userId = req.user?.uid;
     
     if (!message) {
       return res.status(400).json({ error: "Message is required" });
@@ -298,15 +322,34 @@ app.post("/api/chat", requireAuth, async (req, res) => {
       });
     }
     
-    // 2. Fetch User Context from Workspace (if token available) with Redis Caching
+    // 2. Workspace context.
+    // Preferred: a server-held refresh token for this user. The client-supplied
+    // access token is still honoured for backwards compatibility, but it is
+    // reported in the response so the deprecated path is visible rather than
+    // silent.
     let workspaceContext = "";
-    if (token) {
-      const cacheKey = `calendar:${token.slice(0, 16)}`;
+    let workspaceAuthSource: 'server' | 'client-token' | 'none' = 'none';
+
+    let workspaceClient: any = null;
+    if (userId) {
+      workspaceClient = await getWorkspaceAuth().getClient(userId).catch(() => null);
+      if (workspaceClient) workspaceAuthSource = 'server';
+    }
+    if (!workspaceClient && token) {
+      workspaceClient = getOAuth2Client(token);
+      workspaceAuthSource = 'client-token';
+      console.warn(
+        '[workspace] using a client-supplied access token. This path is deprecated; call POST /api/workspace/connect instead.'
+      );
+    }
+
+    if (workspaceClient) {
+      const cacheKey = `calendar:${userId ?? token.slice(0, 16)}`;
       const cachedCalendar = redisCache.get<string>(cacheKey);
       if (cachedCalendar) {
         workspaceContext = cachedCalendar;
       } else {
-        const auth = getOAuth2Client(token);
+        const auth = workspaceClient;
         try {
           const calendar = google.calendar({ version: "v3", auth });
           const events = await calendar.events.list({
@@ -327,7 +370,6 @@ app.post("/api/chat", requireAuth, async (req, res) => {
 
     // 2b. Server-side memory retrieval. Previously the browser fetched 50
     // documents and ranked them client-side; now the server embeds and ranks.
-    const userId = req.user?.uid;
     const memoryContext =
       (await buildMemoryContext(userId, message)) || (typeof req.body.memoryContext === 'string' ? req.body.memoryContext : '');
 
@@ -376,7 +418,7 @@ app.post("/api/chat", requireAuth, async (req, res) => {
 
     await recordTurnEpisode(userId, message, parsedResult.reply ?? '');
 
-    res.json(parsedResult);
+    res.json({ ...parsedResult, workspaceAuthSource });
   } catch (error: any) {
     console.error("Chat Error:", error);
     res.status(500).json({ error: error.message || "Internal server error" });
@@ -386,10 +428,24 @@ app.post("/api/chat", requireAuth, async (req, res) => {
 // Proactive Scenarios Route (Secured with requireAuth)
 app.post("/api/proactive", requireAuth, async (req, res) => {
   try {
-    const { token } = req.body;
-    if (!token) return res.status(401).json({ error: "Workspace OAuth token required." });
+    const { token } = req.body ?? {};
+    const userId = req.user?.uid;
 
-    const auth = getOAuth2Client(token);
+    // Preferred: server-held refresh token for this user. The client-supplied
+    // access token remains a deprecated fallback.
+    let auth: any = userId ? await getWorkspaceAuth().getClient(userId).catch(() => null) : null;
+    if (!auth && token) {
+      auth = getOAuth2Client(token);
+      console.warn('[workspace] /api/proactive used a client-supplied access token (deprecated).');
+    }
+    if (!auth) {
+      return res.status(409).json({
+        error: 'Workspace is not connected for this account.',
+        code: 'not_connected',
+        detail: 'Call POST /api/workspace/connect with an authorisation code first.',
+      });
+    }
+
     const suggestions: string[] = [];
 
     // Scenario 1: Calendar - Next Meeting
@@ -1559,6 +1615,32 @@ app.post("/api/memory/episodes", requireAuth, asyncHandler(async (req, res) => {
   }
   const episode = await getMemoryService().recordEpisode(req.user!.uid, summary);
   res.json({ status: 'recorded', episode });
+}));
+
+// ============================================================================
+// Workspace OAuth (Phase 6.2)
+//
+// The client sends a one-time authorisation CODE. The server exchanges it and
+// keeps the refresh token; no Google token ever reaches the browser.
+// ============================================================================
+
+app.get("/api/workspace/status", requireAuth, asyncHandler(async (req, res) => {
+  const status = await getWorkspaceAuth().status(req.user!.uid);
+  res.json(status);
+}));
+
+app.post("/api/workspace/connect", requireAuth, asyncHandler(async (req, res) => {
+  const { code } = req.body ?? {};
+  if (!code || typeof code !== 'string') {
+    return res.status(400).json({ error: 'An authorisation code is required.', code: 'bad_request' });
+  }
+  const status = await getWorkspaceAuth().connect(req.user!.uid, code);
+  res.json({ status: 'connected', ...status });
+}));
+
+app.delete("/api/workspace/disconnect", requireAuth, asyncHandler(async (req, res) => {
+  const removed = await getWorkspaceAuth().disconnect(req.user!.uid);
+  res.status(removed ? 200 : 404).json({ status: removed ? 'disconnected' : 'not_connected' });
 }));
 
 // --- Unknown API route handler ---

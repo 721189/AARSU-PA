@@ -90,7 +90,8 @@ export function ChatInterface({
   emotion = 'neutral',
   onToggleCollapse
 }: ChatInterfaceProps) {
-  const [workspaceToken, setWorkspaceToken] = useState<string | null>(null);
+  const [workspaceConnected, setWorkspaceConnected] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [firebaseToken, setFirebaseToken] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -196,7 +197,28 @@ export function ChatInterface({
     return () => {
       voiceHotkeyEngine.destroy();
     };
-  }, [firebaseToken, workspaceToken]);
+  }, [firebaseToken]);
+
+  // Ask the server whether Workspace is already connected for this account, so a
+  // returning user is not shown a "connect" prompt they already satisfied.
+  useEffect(() => {
+    if (!firebaseToken) {
+      setWorkspaceConnected(false);
+      return;
+    }
+    let cancelled = false;
+    authenticatedFetch('/api/workspace/status')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        setWorkspaceConnected(Boolean(data.connected));
+        if (data.connected) fetchProactiveSuggestions();
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [firebaseToken]);
 
   // Load the available Gemini TTS voices from the server, which is the single
   // source of truth. The browser's speechSynthesis voice list is no longer used.
@@ -225,13 +247,33 @@ export function ChatInterface({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Auth-code flow. The browser receives a one-time code which the server
+  // exchanges for a refresh token it keeps; no Google access token is ever
+  // exposed to the page, so it cannot leak through logs or history.
   const loginWorkspace = useGoogleLogin({
-    onSuccess: (codeResponse) => {
-      setWorkspaceToken(codeResponse.access_token);
-      if (firebaseToken) {
-        fetchProactiveSuggestions(codeResponse.access_token, firebaseToken);
+    flow: 'auth-code',
+    onSuccess: async (codeResponse) => {
+      try {
+        const res = await authenticatedFetch('/api/workspace/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: codeResponse.code }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          console.warn('Workspace connect failed:', data.error || res.status);
+          setWorkspaceError(data.error || `Workspace connect failed (${res.status})`);
+          return;
+        }
+        setWorkspaceError(null);
+        setWorkspaceConnected(true);
+        fetchProactiveSuggestions();
+      } catch (err: any) {
+        console.warn('Workspace connect error:', err);
+        setWorkspaceError(err?.message || 'Workspace connect failed.');
       }
     },
+    onError: () => setWorkspaceError('Google sign-in was cancelled or denied.'),
     scope: 'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/documents',
   });
 
@@ -246,21 +288,22 @@ export function ChatInterface({
     }
   };
 
-  const fetchProactiveSuggestions = async (wsToken: string, _fbToken?: string) => {
+  const fetchProactiveSuggestions = async () => {
     try {
+      // No token in the body: the server uses the credentials it already holds.
       const res = await authenticatedFetch('/api/proactive', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ token: wsToken }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
       });
-      const data = await res.json();
-      if (data.suggestions) {
-        setProactiveSuggestions(data.suggestions);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (data.code === 'not_connected') setWorkspaceConnected(false);
+        return;
       }
+      if (data.suggestions) setProactiveSuggestions(data.suggestions);
     } catch (e) {
-      console.error(e);
+      console.warn('Proactive suggestions notice:', e);
     }
   };
 
@@ -404,7 +447,6 @@ export function ChatInterface({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             message: text,
-            token: workspaceToken,
             imageBase64,
           }),
         });
@@ -668,7 +710,13 @@ export function ChatInterface({
                 <span>Connected securely</span>
               </div>
 
-              {!workspaceToken ? (
+              {workspaceError && (
+                <span className="text-[10px] text-rose-300 max-w-[180px] truncate" title={workspaceError}>
+                  {workspaceError}
+                </span>
+              )}
+
+              {!workspaceConnected ? (
                 <button 
                   onClick={() => loginWorkspace()}
                   className="px-2 py-1 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 rounded-lg text-[11px] font-medium transition-colors flex items-center gap-1.5"
@@ -694,7 +742,7 @@ export function ChatInterface({
         </div>
 
         {/* Proactive Workspace Insights Box (if connected) */}
-        {workspaceToken && showWorkspaceCard && proactiveSuggestions.length > 0 && (
+        {workspaceConnected && showWorkspaceCard && proactiveSuggestions.length > 0 && (
           <div className="p-2 rounded-lg bg-slate-800/80 border border-slate-700 text-xs space-y-1.5 animate-in fade-in">
             <span className="text-[10px] font-semibold uppercase tracking-wider text-pink-400">Proactive Suggestions</span>
             {proactiveSuggestions.map((sug, i) => (
