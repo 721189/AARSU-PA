@@ -119,7 +119,10 @@ function getDeviceAdapter() {
 
 // --- Enterprise Security Setup ---
 const app = express();
-app.set('trust proxy', 1);
+// Trust exactly as many proxy hops as the deployment actually has. An
+// unvalidated value lets a client spoof X-Forwarded-For and defeat IP rate limits.
+const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS ?? 1);
+app.set('trust proxy', Number.isFinite(trustProxyHops) && trustProxyHops >= 0 ? trustProxyHops : 1);
 const PORT = Number(process.env.PORT ?? 3000);
 
 /**
@@ -138,20 +141,88 @@ const asyncHandler =
     Promise.resolve(fn(req, res, next)).catch(next);
   };
 
-// Security Middleware
-app.use(helmet({
-  contentSecurityPolicy: false, // Disabled for local dev/Vite HMR
-}));
-app.use(cors());
-app.use(express.json());
+const isProduction = process.env.NODE_ENV === 'production';
 
-// Rate Limiting (DDoS protection simulation)
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: "Too many requests from this IP, please try again later."
-});
-app.use("/api/", apiLimiter);
+// --- Security middleware ------------------------------------------------------
+// CSP is enabled in production. It stays off in development because Vite's HMR
+// client needs inline scripts and a websocket.
+app.use(helmet({
+  contentSecurityPolicy: isProduction
+    ? {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'"], // Tailwind injects a style element
+          imgSrc: ["'self'", 'data:', 'blob:'],
+          mediaSrc: ["'self'", 'data:', 'blob:'],
+          connectSrc: ["'self'", 'https://generativelanguage.googleapis.com', 'wss://generativelanguage.googleapis.com'],
+          objectSrc: ["'none'"],
+          frameAncestors: ["'none'"],
+        },
+      }
+    : false,
+}));
+
+// CORS: an explicit allow-list. Previously `cors()` with no options accepted
+// every origin, so any page a signed-in user visited could drive the API from
+// their browser.
+const allowedOrigins = [process.env.CORS_ORIGINS, process.env.APP_URL]
+  .filter(Boolean)
+  .join(',')
+  .split(',')
+  .map((origin) => origin.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+
+if (isProduction && allowedOrigins.length === 0) {
+  console.warn(
+    '[security] No CORS_ORIGINS or APP_URL configured. Cross-origin browser requests will be refused.'
+  );
+}
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Same-origin requests, curl and server-to-server calls send no Origin.
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.length === 0) {
+      // In development, allow anything so local tooling keeps working.
+      return callback(null, !isProduction);
+    }
+    callback(null, allowedOrigins.includes(origin.replace(/\/$/, '')));
+  },
+  credentials: false,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+}));
+
+app.use(express.json({ limit: '12mb' })); // vision frames are base64 JPEGs
+
+// --- Rate limiting ------------------------------------------------------------
+// Previously a single blanket 100-per-15-minutes limit covered all of /api/,
+// which a normal chat session plus HUD polling could trip. Limits are now split
+// by cost: AI routes are expensive, read-only telemetry is cheap.
+const tooMany = { error: 'Too many requests, please slow down.', code: 'rate_limited' };
+
+const generalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 600, message: tooMany });
+const aiLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 80, message: tooMany });
+const readLimiter = rateLimit({ windowMs: 60 * 1000, max: 240, message: tooMany });
+
+app.use('/api/', generalLimiter);
+app.use([
+  '/api/chat',
+  '/api/voice',
+  '/api/agent/act',
+  '/api/jarvis/search',
+  '/api/jarvis/code',
+  '/api/jarvis/maps',
+  '/api/jarvis/swarm',
+  '/api/jarvis/vision/analyze',
+  '/api/jarvis/generate-3d-image',
+], aiLimiter);
+app.use([
+  '/api/health',
+  '/api/jarvis/proactive/feed',
+  '/api/jarvis/redis/metrics',
+  '/api/jarvis/host/diagnostics',
+], readLimiter);
 
 // Start Automated Backups (skipped under test so no cron job is registered)
 if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
@@ -184,6 +255,17 @@ function getOAuth2Client(token: string) {
 }
 
 // --- Routes ---
+
+// Readiness probe. Distinct from /api/health (liveness): readiness reports
+// whether this instance can actually serve traffic right now.
+app.get("/api/ready", (req, res) => {
+  const ready = Boolean(process.env.GEMINI_API_KEY);
+  res.status(ready ? 200 : 503).json({
+    ready,
+    reason: ready ? undefined : 'GEMINI_API_KEY is not configured',
+    timestamp: new Date().toISOString(),
+  });
+});
 
 // Health Check
 // Reports per-dependency status so a dead model, missing key or unreachable
@@ -1714,9 +1796,43 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Enterprise Aarsu server running on http://0.0.0.0:${PORT}`);
+  const server = app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Aarsu / J.A.R.V.I.S. server listening on http://0.0.0.0:${PORT}`);
   });
+
+  installGracefulShutdown(server);
+}
+
+/**
+ * Drains in-flight requests on SIGTERM/SIGINT and stops background work, then
+ * exits. Without this, a container restart drops live voice streams.
+ */
+function installGracefulShutdown(server: import('http').Server): void {
+  let shuttingDown = false;
+
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[shutdown] received ${signal}; draining connections.`);
+
+    proactiveService.stop();
+
+    const forceExit = setTimeout(() => {
+      console.warn('[shutdown] drain timed out; exiting immediately.');
+      process.exit(1);
+    }, 10_000);
+    forceExit.unref();
+
+    server.close((err) => {
+      if (err) console.warn('[shutdown] server close error:', err.message);
+      clearTimeout(forceExit);
+      console.log('[shutdown] complete.');
+      process.exit(err ? 1 : 0);
+    });
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 // Export the fully-configured Express app so the contract test suite can boot it

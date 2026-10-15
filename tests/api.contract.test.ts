@@ -130,6 +130,21 @@ describe('unauthenticated surface', () => {
     expect(res.status).not.toBe(401);
   });
 
+  it('reports readiness separately from liveness', async () => {
+    const res = await fetch(`${baseUrl}/api/ready`);
+    // GEMINI_API_KEY is set for this suite, so the instance is ready.
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ready).toBe(true);
+  });
+
+  it('returns a JSON 404 with a code for an unknown API route', async () => {
+    const res = await fetch(`${baseUrl}/api/not-a-real-endpoint`);
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.code).toBe('not_found');
+  });
+
   it('returns 404 for an unknown route', async () => {
     const res = await fetch(`${baseUrl}/api/definitely-not-a-route`);
     expect(res.status).toBe(404);

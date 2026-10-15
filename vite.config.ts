@@ -11,6 +11,21 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      // Split the heavyweight, rarely-changing libraries out of the entry chunk.
+      // Previously everything shipped as one 1.6 MB bundle.
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            three: ['three'],
+            d3: ['d3'],
+            firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore'],
+            react: ['react', 'react-dom'],
+          },
+        },
+      },
+      chunkSizeWarningLimit: 800,
+    },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.

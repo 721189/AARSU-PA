@@ -1,0 +1,16 @@
+node_modules
+dist
+build
+coverage
+.git
+.github
+.gitignore
+.cline-home
+.aistudio
+*.log
+.env
+.env.*
+!.env.example
+docs
+README.md
+test-*.js
