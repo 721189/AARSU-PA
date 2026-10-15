@@ -11,7 +11,7 @@
 import path from 'node:path';
 import { GoogleGenAI } from '@google/genai';
 import { MODELS } from '../models';
-import { iotBridge } from '../iotBridge';
+import { createDeviceAdapter } from '../iot';
 import type { MemoryService } from '../memory/service';
 import type { ToolDefinition, ToolParameter, ToolResult } from './types';
 
@@ -269,7 +269,7 @@ export class ToolRegistry {
     return {
       name: 'control_device',
       description:
-        'Controls a smart-facility device (lighting, climate, security, power). Requires user confirmation. NOTE: devices are currently simulated in-process, not real hardware.',
+        'Controls a smart-home device (lighting, climate, security, power) via Home Assistant when configured. Requires user confirmation. When Home Assistant is not configured the devices are simulated, and the result says so.',
       destructive: true,
       parameters: [
         { name: 'deviceId', type: 'string', description: 'Device id, e.g. dev_light_lab', required: true },
@@ -277,11 +277,15 @@ export class ToolRegistry {
       ],
       execute: async (args): Promise<ToolResult> => {
         try {
-          const updated = iotBridge.updateDeviceState(String(args.deviceId), args.state ?? {});
+          const adapter = createDeviceAdapter();
+          const updated = await adapter.updateDeviceState(String(args.deviceId), args.state ?? {});
           return {
             ok: true,
-            summary: `${updated.name} updated (simulated device).`,
-            data: updated.state,
+            // Say plainly whether real hardware was touched.
+            summary: adapter.simulated
+              ? `${updated.name} updated (SIMULATED device - no real hardware is connected).`
+              : `${updated.name} updated via ${adapter.name}.`,
+            data: { state: updated.state, simulated: adapter.simulated, adapter: adapter.name },
           };
         } catch (err) {
           return { ok: false, summary: (err as Error).message };

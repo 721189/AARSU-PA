@@ -12,7 +12,7 @@ import { IronLegionOrchestrator } from "./src/server/agentOrchestrator";
 import { jarvisGraph } from "./src/lib/knowledgeGraph";
 import { redisCache } from "./src/server/redisCache";
 import { dbService } from "./src/server/dbService";
-import { iotBridge } from "./src/server/iotBridge";
+import { createDeviceAdapter } from "./src/server/iot";
 import { reinforcementScheduler } from "./src/server/reinforcementScheduler";
 import {
   MODELS,
@@ -106,6 +106,15 @@ function getWorkspaceAuth(): WorkspaceAuthService {
     workspaceAuthInstance = new WorkspaceAuthService({ store: createTokenStore() });
   }
   return workspaceAuthInstance;
+}
+
+// --- Device adapter (Phase 6.3) ---
+// Home Assistant when configured, otherwise the simulated facility. Either way
+// `simulated` is reported to the caller.
+let deviceAdapterInstance: ReturnType<typeof createDeviceAdapter> | null = null;
+function getDeviceAdapter() {
+  if (!deviceAdapterInstance) deviceAdapterInstance = createDeviceAdapter();
+  return deviceAdapterInstance;
 }
 
 // --- Enterprise Security Setup ---
@@ -985,27 +994,42 @@ app.post("/api/jarvis/vision/analyze", requireAuth, async (req, res) => {
 });
 
 // --- Smart Facility & IoT Hardware Bridge Endpoints ---
-app.get("/api/jarvis/iot/devices", requireAuth, (req, res) => {
-  res.json({ devices: iotBridge.getAllDevices() });
-});
+app.get("/api/jarvis/iot/devices", requireAuth, asyncHandler(async (req, res) => {
+  const adapter = getDeviceAdapter();
+  res.json({
+    devices: await adapter.listDevices(),
+    adapter: adapter.name,
+    simulated: adapter.simulated,
+  });
+}));
 
-app.post("/api/jarvis/iot/control", requireAuth, (req, res) => {
-  const { deviceId, state } = req.body;
-  if (!deviceId || !state) return res.status(400).json({ error: "deviceId and state required" });
-
-  try {
-    const updated = iotBridge.updateDeviceState(deviceId, state);
-    res.json({ status: "success", device: updated });
-  } catch (err: any) {
-    res.status(404).json({ error: err.message });
+app.post("/api/jarvis/iot/control", requireAuth, asyncHandler(async (req, res) => {
+  const { deviceId, state } = req.body ?? {};
+  if (!deviceId || !state) {
+    return res.status(400).json({ error: 'deviceId and state are required', code: 'bad_request' });
   }
-});
 
-app.post("/api/jarvis/iot/protocol", requireAuth, (req, res) => {
-  const { protocol } = req.body;
-  const result = iotBridge.executeFacilityProtocol(protocol || 'nominal_work');
-  res.json({ status: "protocol_engaged", message: result, devices: iotBridge.getAllDevices() });
-});
+  const adapter = getDeviceAdapter();
+  try {
+    const updated = await adapter.updateDeviceState(deviceId, state);
+    res.json({ status: 'success', device: updated, adapter: adapter.name, simulated: adapter.simulated });
+  } catch (err: any) {
+    res.status(404).json({ error: err.message, code: 'not_found' });
+  }
+}));
+
+app.post("/api/jarvis/iot/protocol", requireAuth, asyncHandler(async (req, res) => {
+  const { protocol } = req.body ?? {};
+  const adapter = getDeviceAdapter();
+  const result = await adapter.executeProtocol(protocol || 'nominal_work');
+  res.json({
+    status: 'protocol_engaged',
+    message: result.message,
+    devices: result.devices,
+    adapter: adapter.name,
+    simulated: adapter.simulated,
+  });
+}));
 
 // --- Host OS Kernel & Deep Process Diagnostics Endpoint ---
 app.get("/api/jarvis/host/diagnostics", requireAuth, async (req, res) => {
