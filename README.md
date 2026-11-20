@@ -34,7 +34,7 @@ The IoT bridge is simulated and cannot control physical hardware. Biometric valu
 
 ## Setup
 
-1. Install dependencies with npm ci.
+1. Install dependencies with npm install.
 2. Create an environment file from .env.example.
 3. Configure GEMINI_API_KEY.
 4. Configure Firebase client settings and Firebase Admin credentials. Admin credentials must be supplied through the deployment environment and must never be committed.
@@ -69,7 +69,7 @@ When requested scopes change, users may need to reconnect Google Workspace and g
 
 Use a Node.js service such as Cloud Run or Render.
 
-- Build command: npm ci && npm run build
+- Build command: npm install && npm run build
 - Start command: npm start
 - Server secrets: GEMINI_API_KEY and Firebase Admin credentials
 - Public configuration: Firebase web config and Google OAuth client ID
