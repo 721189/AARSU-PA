@@ -24,7 +24,7 @@ export function validateCalendarEventInput(value: unknown): CalendarEventInput {
   const endDateTime = requiredString(args.endDateTime, "endDateTime", 64);
   const start = Date.parse(startDateTime);
   const end = Date.parse(endDateTime);
-  const hasExplicitOffset = (value: string) => /(?:Z|[+-]\\d{2}:\\d{2})$/i.test(value);
+  const hasExplicitOffset = (value: string) => /(?:Z|[+-]\d{2}:\d{2})$/i.test(value);
   if (!hasExplicitOffset(startDateTime) || !hasExplicitOffset(endDateTime)) {
     throw new Error("Calendar date-times must include an explicit UTC offset or Z suffix.");
   }
