@@ -34,5 +34,8 @@ export const config = {
   enableVoice: parseBooleanEnv(process.env.ENABLE_VOICE, true),
   enableWorkspace: parseBooleanEnv(process.env.ENABLE_WORKSPACE, true),
   geminiApiKey: process.env.GEMINI_API_KEY,
+  appUrl: process.env.APP_URL && /^https?:\/\//.test(process.env.APP_URL)
+    ? process.env.APP_URL.replace(/\/$/, "")
+    : undefined,
 };
 
