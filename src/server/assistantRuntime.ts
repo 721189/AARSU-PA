@@ -407,6 +407,7 @@ export async function executeAssistantTurn(
   const toolsUsed = new Set<string>();
   const MAX_TOOL_ROUNDS = 4;
   const MAX_TOOL_CALLS_PER_ROUND = 5;
+  let toolContinuationError = false;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const calls: any[] = Array.isArray(response.functionCalls) ? response.functionCalls : [];
@@ -461,15 +462,23 @@ export async function executeAssistantTurn(
     }
 
     conversationContents.push({ role: "user", parts: responseParts });
-    response = await ai.models.generateContent({
-      model: MODEL,
-      contents: conversationContents,
-      config: generationConfig
-    });
+    try {
+      response = await ai.models.generateContent({
+        model: MODEL,
+        contents: conversationContents,
+        config: generationConfig
+      });
+    } catch (error) {
+      toolContinuationError = true;
+      console.warn("Assistant tool continuation notice:", error);
+      break;
+    }
   }
 
   const toolLoopIncomplete = Array.isArray(response.functionCalls) && response.functionCalls.length > 0;
-  const reply = toolLoopIncomplete
+  const reply = toolContinuationError
+    ? "I received results from the available tool operations, but the model could not complete its final synthesis. Please ask me to summarize the results again. Any write actions I prepared remain pending and have not been executed."
+    : toolLoopIncomplete
     ? ((response.text || "I completed part of the workflow.") +
       "\n\nI reached the safe tool-call limit for this turn. The work above is partial; ask me to continue before treating the workflow as complete.")
     : (response.text || (pendingActions.length
