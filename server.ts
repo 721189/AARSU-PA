@@ -19,6 +19,7 @@ import { reinforcementScheduler } from "./src/server/reinforcementScheduler";
 import { config } from "./src/server/config";
 import { workspaceRouter } from "./src/server/routes/workspace";
 import { createMcpRouter } from "./src/server/routes/mcp";
+import { createAssistantRouter } from "./src/server/routes/assistant";
 
 // --- Enterprise Security Setup ---
 const app = express();
@@ -421,6 +422,7 @@ app.post("/api/agent/run", requireAuth, async (req, res) => {
 });
 
 app.use("/api/fs", workspaceRouter);
+app.use("/api/assistant", createAssistantRouter(getAI));
 
 // --- JARVIS Live Google Search Grounding Endpoint ---
 app.post("/api/jarvis/search", requireAuth, async (req, res) => {
