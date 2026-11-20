@@ -4,7 +4,10 @@ import {
   validateCalendarEventInput,
   validateGmailDraftInput,
   validateGoogleDocInput,
-  validateGmailSearchQuery
+  validateGmailSearchQuery,
+  validateGoogleDriveQuery,
+  validateGoogleDocumentId,
+  validateGoogleSpreadsheetId
 } from "../src/server/assistantValidation.ts";
 
 test("calendar event accepts a valid interval", () => {
@@ -42,4 +45,29 @@ test("Google Doc validation rejects empty titles", () => {
 test("Gmail search rejects blank and oversized queries", () => {
   assert.throws(() => validateGmailSearchQuery(" "));
   assert.throws(() => validateGmailSearchQuery("x".repeat(241)));
+});
+
+
+test("calendar event requires an explicit offset and a real IANA timezone", () => {
+  assert.throws(() => validateCalendarEventInput({
+    summary: "Review",
+    startDateTime: "2026-12-01T10:00:00",
+    endDateTime: "2026-12-01T10:30:00",
+    timeZone: "Asia/Kolkata"
+  }));
+  assert.throws(() => validateCalendarEventInput({
+    summary: "Review",
+    startDateTime: "2026-12-01T10:00:00+05:30",
+    endDateTime: "2026-12-01T10:30:00+05:30",
+    timeZone: "Mars/Olympus"
+  }));
+});
+
+test("Drive search and document identifiers are validated", () => {
+  assert.equal(validateGoogleDriveQuery("project report"), "project report");
+  assert.throws(() => validateGoogleDriveQuery("x".repeat(161)));
+  assert.equal(validateGoogleDocumentId("1a2b3c4d5e_ABC"), "1a2b3c4d5e_ABC");
+  assert.equal(validateGoogleSpreadsheetId("1a2b3c4d5e-ABC"), "1a2b3c4d5e-ABC");
+  assert.throws(() => validateGoogleDocumentId("short"));
+  assert.throws(() => validateGoogleSpreadsheetId("bad id"));
 });
