@@ -136,7 +136,7 @@ export function getAssistantCapabilities() {
     domains: ASSISTANT_DOMAIN_OPTIONS,
     capabilities: [
       { id: "grounded_research", label: "Web research", access: "Google Search grounding", mode: "read" },
-      { id: "code_execution", label: "Calculations and code", access: "Google-hosted code execution sandbox", mode: "sandboxed" },
+      { id: "code_execution", label: "Calculations and code", access: "Google-hosted code execution sandbox", mode: "sandboxed", modes: ["research", "engineering", "learning", "data_analysis"] },
       { id: "drive_search", label: "Drive search", access: "Google Drive read-only", mode: "read" },
       { id: "document_read", label: "Google Docs reading", access: "Google Docs read-only", mode: "read" },
       { id: "sheets_read", label: "Spreadsheet analysis", access: "Google Sheets read-only, bounded to A1:Z500", mode: "read" },
