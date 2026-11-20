@@ -255,7 +255,7 @@ export function ChatInterface({
         fetchProactiveSuggestions(codeResponse.access_token, firebaseToken);
       }
     },
-    scope: 'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/documents',
+    scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/documents',
   });
 
   const handleSecureLogin = async () => {
@@ -271,16 +271,19 @@ export function ChatInterface({
 
   const fetchProactiveSuggestions = async (wsToken: string, _fbToken?: string) => {
     try {
-      const res = await authenticatedFetch('/api/proactive', {
+      const res = await authenticatedFetch('/api/jarvis/proactive/analyze', {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ token: wsToken }),
       });
       const data = await res.json();
-      if (data.suggestions) {
-        setProactiveSuggestions(data.suggestions);
+      if (!res.ok) throw new Error(data.error || "Workspace analysis failed.");
+      if (Array.isArray(data.suggestions)) {
+        setProactiveSuggestions(data.suggestions.map((suggestion: any) =>
+          String(suggestion.title || "Suggested task") + ": " + String(suggestion.suggestedAction || "")
+        ));
       }
     } catch (e) {
       console.error(e);
@@ -607,7 +610,7 @@ export function ChatInterface({
         },
         body: JSON.stringify({ 
           message: text, 
-          token: workspaceToken, 
+          workspaceToken: workspaceToken, 
           memoryContext,
           imageBase64
         })
