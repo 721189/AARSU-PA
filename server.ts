@@ -854,9 +854,7 @@ app.use("/api/mcp", createMcpRouter(getAI));
 async function startServer() {
   // Start background proactive daemon & MCP server
   try {
-    const aiClient = getAI();
-    predictiveDaemon.setAIClient(aiClient);
-    mcpServer.setAIClient(aiClient);
+    mcpServer.setAIClient(getAI());
   } catch {}
   predictiveDaemon.start();
 
