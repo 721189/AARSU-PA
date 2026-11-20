@@ -1013,7 +1013,7 @@ export function ChatInterface({
             {pendingActions.map(action => (
               <div key={action.id} className="rounded-xl border border-amber-500/40 bg-amber-950/20 p-3 space-y-2">
                 <div className="text-xs font-semibold text-amber-100">{action.title}</div>
-                <div className="text-[11px] text-slate-300">{action.summary}</div>
+                <div className="text-[11px] text-slate-300 whitespace-pre-wrap break-words max-h-40 overflow-y-auto rounded-md bg-slate-950/50 p-2">{action.summary}</div>
                 <div className="flex gap-2">
                   <button
                     onClick={() => approvePendingAction(action)}
