@@ -343,11 +343,7 @@ app.post("/api/proactive", requireAuth, async (req, res) => {
       console.error("Gmail fetch error:", e);
     }
 
-    // Fallback Scenario 3 if Gmail fails or is empty (Stale Calendar event)
-    if (suggestions.length < 3) {
-      suggestions.push(`Your calendar shows a recurring event that hasn't been updated in months. Would you like me to archive it?`);
-    }
-
+    // Never invent a calendar event or email as a filler suggestion.
     res.json({ suggestions });
   } catch (error: any) {
     console.error("Proactive Error:", error);
