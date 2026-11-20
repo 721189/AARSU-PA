@@ -18,7 +18,7 @@ export function createAssistantRouter(getAI: () => GoogleGenAI) {
       ...getAssistantCapabilities(),
       integrations: {
         googleWorkspaceEnabled: config.enableWorkspace,
-        googleWorkspaceConnectedPerRequest: true
+        requiresGoogleOAuthOnEachRequest: true
       }
     });
   });
@@ -35,6 +35,8 @@ export function createAssistantRouter(getAI: () => GoogleGenAI) {
     try {
       const { message, workspaceToken, memoryContext, imageBase64, domain } = req.body || {};
       if (typeof message !== "string" || !message.trim()) return res.status(400).json({ error: "Message is required." });
+      if (message.length > 8000) return res.status(400).json({ error: "Message is too long (maximum 8,000 characters)." });
+      if (domain !== undefined && typeof domain !== "string") return res.status(400).json({ error: "Domain must be a string." });
       const token = config.enableWorkspace && typeof workspaceToken === "string" ? workspaceToken : undefined;
       const result = await executeAssistantTurn(
         getAI(), req.user!.uid, message, token,
