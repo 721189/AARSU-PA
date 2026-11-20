@@ -50,10 +50,9 @@ const allowedOrigins = new Set(
   [config.appUrl, "http://localhost:3000", "http://localhost:5173"].filter((value): value is string => Boolean(value))
 );
 app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
-    return callback(new Error("Origin is not allowed by this server."));
-  }
+  // Cross-origin browser clients must match APP_URL or a local development origin.
+  // Same-origin production requests do not require an Access-Control-Allow-Origin header.
+  origin: Array.from(allowedOrigins)
 }));
 app.use(express.json({ limit: "8mb" }));
 
@@ -563,22 +562,22 @@ app.post("/api/jarvis/generate-3d-image", requireAuth, async (req, res) => {
 
     const enhancedPrompt = `Ultra-realistic 3D holographic render, cinematic sci-fi lighting, Stark Industries CAD wireframe overlay, photorealistic textures, 8k resolution, volumetric neon glow: ${prompt}`;
 
-    const response = await aiClient.models.generateImages({
-      model: "imagen-3.0-generate-002",
-      prompt: enhancedPrompt,
-      config: {
-        numberOfImages: 1,
-        outputMimeType: "image/jpeg",
-        aspectRatio: "16:9",
-      },
+    const interaction = await (aiClient as any).interactions.create({
+      model: "gemini-nano-banana-2.1",
+      input: enhancedPrompt,
+      response_modalities: ["image"]
     });
-
-    const generatedImage = response.generatedImages?.[0];
-    if (!generatedImage?.image?.imageBytes) {
-      throw new Error("No image bytes returned from generation model.");
+    const imageContent = interaction.steps
+      ?.filter((step: any) => step.type === "model_output")
+      .flatMap((step: any) => step.content || [])
+      .find((item: any) => item.type === "image" && typeof item.data === "string")
+      || interaction.output_image
+      || interaction.outputs?.find((item: any) => item.type === "image" && typeof item.data === "string");
+    if (!imageContent?.data) {
+      throw new Error("The image model returned no image output.");
     }
-
-    const base64Image = `data:image/jpeg;base64,${generatedImage.image.imageBytes}`;
+    const mimeType = imageContent.mime_type || "image/png";
+    const base64Image = "data:" + mimeType + ";base64," + imageContent.data;
     res.json({
       imageUrl: base64Image,
       prompt: enhancedPrompt,
@@ -586,13 +585,7 @@ app.post("/api/jarvis/generate-3d-image", requireAuth, async (req, res) => {
     });
   } catch (err: any) {
     console.error("3D Image Generation Error:", err);
-    // Return a pristine fallback holographic schematic data URI if generation quota/key is limited
-    res.json({
-      imageUrl: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1200&q=80",
-      prompt: req.body.prompt,
-      fallback: true,
-      timestamp: new Date().toISOString()
-    });
+    res.status(502).json({ error: "Image generation is currently unavailable. No placeholder image was substituted." });
   }
 });
 
