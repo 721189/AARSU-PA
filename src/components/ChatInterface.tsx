@@ -50,6 +50,7 @@ interface ChatInterfaceProps {
 }
 
 type SoftnessPresetKey = 'soft_sweet' | 'gentle_whisper' | 'playful_bright';
+type AssistantDomainId = 'auto' | 'research' | 'engineering' | 'learning' | 'writing' | 'data_analysis' | 'productivity' | 'strategy';
 
 interface SoftnessPreset {
   label: string;
@@ -106,6 +107,7 @@ export function ChatInterface({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [assistantDomain, setAssistantDomain] = useState<AssistantDomainId>('auto');
   const [isListening, setIsListening] = useState(false);
   const [isVisionActive, setIsVisionActive] = useState(false);
   
@@ -211,7 +213,7 @@ export function ChatInterface({
     return () => {
       voiceHotkeyEngine.destroy();
     };
-  }, [firebaseToken, workspaceToken]);
+  }, [firebaseToken, workspaceToken, assistantDomain]);
 
   // Initialize and prioritize soft female speech synthesis voices
   useEffect(() => {
@@ -255,7 +257,7 @@ export function ChatInterface({
         fetchProactiveSuggestions(codeResponse.access_token, firebaseToken);
       }
     },
-    scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/documents',
+    scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/spreadsheets.readonly',
   });
 
   const handleSecureLogin = async () => {
@@ -612,7 +614,8 @@ export function ChatInterface({
           message: text, 
           workspaceToken: workspaceToken, 
           memoryContext,
-          imageBase64
+          imageBase64,
+          domain: assistantDomain
         })
       });
       
@@ -948,7 +951,7 @@ export function ChatInterface({
             </div>
             <p className="text-sm font-semibold text-slate-200">Talk with Aarsu</p>
             <p className="text-xs text-slate-400 max-w-xs leading-relaxed">
-              Ask Aarsu to research, inspect your schedule, prepare drafts or create documents. Workspace changes always require your approval.
+              Use Auto or choose Research, Engineering, Learning, Writing, Data analysis, Productivity or Strategy. Aarsu can search connected Drive files, read Docs and Sheets, and prepare Workspace changes for your approval.
             </p>
 
             {/* Quick Vision & Sight Suggestion Chips */}
@@ -1047,8 +1050,31 @@ export function ChatInterface({
         <div ref={messagesEndRef} />
       </div>
 
+      {/* ================= DOMAIN MODE SELECTOR ================= */}
+      <div className="px-3 pt-2 bg-slate-900/95 border-t border-slate-800">
+        <div className="flex items-center gap-2">
+          <span className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold">Mode</span>
+          <select
+            aria-label="Choose Aarsu operating mode"
+            value={assistantDomain}
+            onChange={(event) => setAssistantDomain(event.target.value as AssistantDomainId)}
+            className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-[10px] text-slate-200 focus:outline-none focus:border-cyan-500"
+          >
+            <option value="auto">Auto</option>
+            <option value="research">Research</option>
+            <option value="engineering">Engineering</option>
+            <option value="learning">Learning</option>
+            <option value="writing">Writing</option>
+            <option value="data_analysis">Data analysis</option>
+            <option value="productivity">Productivity</option>
+            <option value="strategy">Strategy</option>
+          </select>
+          <span className="text-[9px] text-slate-500 truncate">Specialized workflows, tools and response standards</span>
+        </div>
+      </div>
+
       {/* ================= INPUT & VOICE RECOGNITION BAR ================= */}
-      <div className="p-3 bg-slate-900/95 border-t border-slate-800 flex items-center gap-2">
+      <div className="px-3 py-3 bg-slate-900/95 flex items-center gap-2">
         <button 
           onClick={startListening}
           title={isListening ? "Listening to your voice..." : "Voice Input (Speech-to-text)"}
