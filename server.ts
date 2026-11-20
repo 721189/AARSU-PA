@@ -559,9 +559,8 @@ app.post("/api/jarvis/generate-3d-image", requireAuth, async (req, res) => {
     const enhancedPrompt = `Ultra-realistic 3D holographic render, cinematic sci-fi lighting, Stark Industries CAD wireframe overlay, photorealistic textures, 8k resolution, volumetric neon glow: ${prompt}`;
 
     const interaction = await (aiClient as any).interactions.create({
-      model: "gemini-nano-banana-2.1",
+      model: "gemini-3.1-flash-image",
       input: enhancedPrompt,
-      response_modalities: ["image"]
     });
     const imageContent = interaction.steps
       ?.filter((step: any) => step.type === "model_output")
