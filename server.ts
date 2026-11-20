@@ -1,4 +1,5 @@
 import express from "express";
+import { createHash } from "crypto";
 import path from "path";
 import cors from "cors";
 import helmet from "helmet";
@@ -13,7 +14,7 @@ import { jarvisGraph } from "./src/lib/knowledgeGraph";
 import { redisCache } from "./src/server/redisCache";
 import { dbService } from "./src/server/dbService";
 import { predictiveDaemon } from "./src/server/predictiveDaemon";
-import { iotBridge } from "./src/server/iotBridge";
+import { getIoTBridgeForUser } from "./src/server/iotBridge";
 import { mcpServer } from "./src/server/mcpServer";
 import { reinforcementScheduler } from "./src/server/reinforcementScheduler";
 import { config } from "./src/server/config";
@@ -27,10 +28,34 @@ app.set('trust proxy', 1);
 
 // Security Middleware
 app.use(helmet({
-  contentSecurityPolicy: false, // Disabled for local dev/Vite HMR
+  contentSecurityPolicy: config.nodeEnv === "production" ? {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://accounts.google.com", "https://apis.google.com"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "blob:", "https:"],
+      fontSrc: ["'self'", "data:", "https:"],
+      connectSrc: [
+        "'self'", "https://*.googleapis.com", "https://identitytoolkit.googleapis.com",
+        "https://securetoken.googleapis.com", "https://accounts.google.com", "https://www.googleapis.com"
+      ],
+      frameSrc: ["'self'", "https://accounts.google.com"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      frameAncestors: ["'none'"]
+    }
+  } : false
 }));
-app.use(cors());
-app.use(express.json());
+const allowedOrigins = new Set(
+  [config.appUrl, "http://localhost:3000", "http://localhost:5173"].filter((value): value is string => Boolean(value))
+);
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+    return callback(new Error("Origin is not allowed by this server."));
+  }
+}));
+app.use(express.json({ limit: "8mb" }));
 
 // Rate Limiting (DDoS protection simulation)
 const apiLimiter = rateLimit({
@@ -81,7 +106,7 @@ const embeddingCache = new Map<string, number[]>();
 // Helper function to robustly generate Gemini responses with automatic retry and model fallbacks
 async function generateContentWithFallback(aiClient: GoogleGenAI, contents: any, systemInstruction: string): Promise<string> {
   // Use valid, active models from @google/genai guidelines
-  const models = ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-2.5-flash"];
+  const models = ["gemini-3.8-flash", "gemini-3.5-flash-lite"];
   let lastError: any = null;
 
   for (const model of models) {
@@ -161,7 +186,7 @@ app.post("/api/chat", requireAuth, async (req, res) => {
     // 2. Fetch User Context from Workspace (if token available) with Redis Caching
     let workspaceContext = "";
     if (token) {
-      const cacheKey = `calendar:${token.slice(0, 16)}`;
+      const cacheKey = `calendar:${req.user!.uid}:${createHash("sha256").update(token).digest("hex").slice(0, 16)}`;
       const cachedCalendar = redisCache.get<string>(cacheKey);
       if (cachedCalendar) {
         workspaceContext = cachedCalendar;
@@ -347,8 +372,9 @@ app.post("/api/embed", requireAuth, async (req, res) => {
     if (!text || typeof text !== 'string') return res.status(400).json({ error: "Text is required" });
     
     const trimmed = text.trim();
-    if (embeddingCache.has(trimmed)) {
-      return res.json({ embedding: embeddingCache.get(trimmed) });
+    const cacheKey = req.user!.uid + ":" + createHash("sha256").update(trimmed).digest("hex");
+    if (embeddingCache.has(cacheKey)) {
+      return res.json({ embedding: embeddingCache.get(cacheKey) });
     }
 
     const aiClient = getAI();
@@ -356,7 +382,7 @@ app.post("/api/embed", requireAuth, async (req, res) => {
 
     try {
       const response = await aiClient.models.embedContent({
-        model: 'text-embedding-004',
+        model: 'gemini-embedding-001',
         contents: trimmed,
       });
       embedding = response.embeddings?.[0]?.values || [];
@@ -366,7 +392,7 @@ app.post("/api/embed", requireAuth, async (req, res) => {
           const firstKey = embeddingCache.keys().next().value;
           if (firstKey) embeddingCache.delete(firstKey);
         }
-        embeddingCache.set(trimmed, embedding);
+        embeddingCache.set(cacheKey, embedding);
       }
     } catch (embedApiErr: any) {
       const msg = (embedApiErr?.message || String(embedApiErr)).toLowerCase();
@@ -639,22 +665,7 @@ app.post("/api/jarvis/swarm", requireAuth, async (req, res) => {
     const orchestrator = new IronLegionOrchestrator(aiClient);
     const result = await orchestrator.executeMission(objective);
 
-    // Record this mission event into the Associative Knowledge Graph
-    jarvisGraph.addNode({
-      id: result.missionId,
-      label: `Mission: ${objective.slice(0, 30)}...`,
-      type: 'project',
-      properties: { totalTimeMs: result.totalTimeMs, healing: result.selfHealingTriggered },
-      lastUpdated: new Date().toISOString()
-    });
-    jarvisGraph.addEdge({
-      id: `edge_${Date.now()}`,
-      source: 'iron-legion',
-      target: result.missionId,
-      relation: 'TRIGGERS',
-      weight: 0.95
-    });
-
+    // Return the mission to its caller only. Personal objectives are not written into a shared graph.
     res.json(result);
   } catch (err: any) {
     console.error("Iron Legion Swarm Error:", err);
@@ -684,28 +695,34 @@ app.get("/api/jarvis/redis/metrics", requireAuth, (req, res) => {
 });
 
 // --- Proactive Predictive Telemetry Feed Endpoint ---
-app.get("/api/jarvis/proactive/feed", requireAuth, (req, res) => {
+app.get("/api/jarvis/proactive/feed", requireAuth, async (req, res) => {
   res.json({
     alerts: predictiveDaemon.getRecentAlerts(),
-    biometrics: dbService.getLatestBiometrics()
+    biometrics: await dbService.getLatestBiometrics(req.user!.uid)
   });
 });
 
 // --- Biometric Telemetry Sync Endpoint ---
-app.get("/api/jarvis/biometrics", requireAuth, (req, res) => {
-  res.json(dbService.getLatestBiometrics());
+app.get("/api/jarvis/biometrics", requireAuth, async (req, res) => {
+  res.json(await dbService.getLatestBiometrics(req.user!.uid));
 });
 
 app.post("/api/jarvis/biometrics", requireAuth, async (req, res) => {
-  const { heartRate, stressIndex, focusLevel, coreTempC } = req.body;
+  const { heartRate, stressIndex, focusLevel, coreTempC } = req.body || {};
   const bio = {
-    heartRate: Number(heartRate) || 72,
-    stressIndex: Number(stressIndex) || 20,
-    focusLevel: Number(focusLevel) || 90,
-    coreTempC: Number(coreTempC) || 36.8,
-    timestamp: new Date().toISOString()
+    heartRate: Number(heartRate),
+    stressIndex: Number(stressIndex),
+    focusLevel: Number(focusLevel),
+    coreTempC: Number(coreTempC),
+    timestamp: new Date().toISOString(),
+    source: "user-reported" as const
   };
-  await dbService.recordBiometrics(bio);
+  const valid = Number.isFinite(bio.heartRate) && bio.heartRate >= 30 && bio.heartRate <= 220
+    && Number.isFinite(bio.stressIndex) && bio.stressIndex >= 0 && bio.stressIndex <= 100
+    && Number.isFinite(bio.focusLevel) && bio.focusLevel >= 0 && bio.focusLevel <= 100
+    && Number.isFinite(bio.coreTempC) && bio.coreTempC >= 20 && bio.coreTempC <= 45;
+  if (!valid) return res.status(400).json({ error: "Telemetry values are outside the accepted ranges." });
+  await dbService.recordBiometrics(req.user!.uid, bio);
   res.json({ status: "recorded", data: bio });
 });
 
@@ -753,7 +770,7 @@ app.post("/api/jarvis/vision/analyze", requireAuth, async (req, res) => {
 
 // --- Smart Facility & IoT Hardware Bridge Endpoints ---
 app.get("/api/jarvis/iot/devices", requireAuth, (req, res) => {
-  res.json({ devices: iotBridge.getAllDevices() });
+  res.json({ devices: getIoTBridgeForUser(req.user!.uid).getAllDevices(), simulated: true });
 });
 
 app.post("/api/jarvis/iot/control", requireAuth, (req, res) => {
@@ -761,7 +778,7 @@ app.post("/api/jarvis/iot/control", requireAuth, (req, res) => {
   if (!deviceId || !state) return res.status(400).json({ error: "deviceId and state required" });
 
   try {
-    const updated = iotBridge.updateDeviceState(deviceId, state);
+    const updated = getIoTBridgeForUser(req.user!.uid).updateDeviceState(deviceId, state);
     res.json({ status: "success", device: updated });
   } catch (err: any) {
     res.status(404).json({ error: err.message });
@@ -770,8 +787,9 @@ app.post("/api/jarvis/iot/control", requireAuth, (req, res) => {
 
 app.post("/api/jarvis/iot/protocol", requireAuth, (req, res) => {
   const { protocol } = req.body;
-  const result = iotBridge.executeFacilityProtocol(protocol || 'nominal_work');
-  res.json({ status: "protocol_engaged", message: result, devices: iotBridge.getAllDevices() });
+  const bridge = getIoTBridgeForUser(req.user!.uid);
+  const result = bridge.executeFacilityProtocol(protocol || 'nominal_work');
+  res.json({ status: "protocol_engaged", simulated: true, message: result, devices: bridge.getAllDevices() });
 });
 
 // --- Host OS Kernel & Deep Process Diagnostics Endpoint ---
@@ -799,8 +817,8 @@ app.get("/api/jarvis/host/diagnostics", requireAuth, async (req, res) => {
 });
 
 // --- Proactive Task Scheduling & Reinforcement Learning Endpoints ---
-app.get("/api/jarvis/proactive/tasks", requireAuth, (req, res) => {
-  res.json({ suggestions: reinforcementScheduler.getSuggestions() });
+app.get("/api/jarvis/proactive/tasks", requireAuth, async (req, res) => {
+  res.json({ suggestions: await reinforcementScheduler.getSuggestions(req.user!.uid) });
 });
 
 app.post("/api/jarvis/proactive/analyze", requireAuth, async (req, res) => {
@@ -811,7 +829,7 @@ app.post("/api/jarvis/proactive/analyze", requireAuth, async (req, res) => {
       reinforcementScheduler.setAIClient(aiClient);
     } catch {}
 
-    const tasks = await reinforcementScheduler.analyzeWorkspaceForProactiveTasks(token);
+    const tasks = await reinforcementScheduler.analyzeWorkspaceForProactiveTasks(req.user!.uid, token);
     res.json({ status: "success", count: tasks.length, suggestions: tasks });
   } catch (err: any) {
     console.error("Proactive Analysis Error:", err);
@@ -819,18 +837,25 @@ app.post("/api/jarvis/proactive/analyze", requireAuth, async (req, res) => {
   }
 });
 
-app.post("/api/jarvis/reinforcement/feedback", requireAuth, (req, res) => {
-  const { suggestionId, feedback } = req.body;
-  if (!suggestionId || !feedback) {
-    return res.status(400).json({ error: "suggestionId and feedback required" });
+app.post("/api/jarvis/reinforcement/feedback", requireAuth, async (req, res) => {
+  const { suggestionId, feedback } = req.body || {};
+  if (typeof suggestionId !== "string" || !["accept", "dismiss", "complete"].includes(feedback)) {
+    return res.status(400).json({ error: "A valid suggestionId and feedback value are required." });
   }
-
-  const result = reinforcementScheduler.recordFeedback(suggestionId, feedback);
-  res.json({ status: "recorded", ...result, metrics: reinforcementScheduler.getReinforcementMetrics() });
+  try {
+    const result = await reinforcementScheduler.recordFeedback(req.user!.uid, suggestionId, feedback);
+    return res.json({
+      status: "recorded",
+      ...result,
+      metrics: await reinforcementScheduler.getReinforcementMetrics(req.user!.uid)
+    });
+  } catch (error: any) {
+    return res.status(404).json({ error: error?.message || "Suggestion was not found." });
+  }
 });
 
-app.get("/api/jarvis/reinforcement/metrics", requireAuth, (req, res) => {
-  res.json(reinforcementScheduler.getReinforcementMetrics());
+app.get("/api/jarvis/reinforcement/metrics", requireAuth, async (req, res) => {
+  res.json(await reinforcementScheduler.getReinforcementMetrics(req.user!.uid));
 });
 
 
