@@ -28,6 +28,15 @@ import { VisionManager, VisionManagerHandle } from './VisionManager';
 import { voiceHotkeyEngine } from '../lib/voiceHotkeyEngine';
 import { jarvisAudio } from '../lib/audioEngine';
 
+interface PendingAssistantAction {
+  id: string;
+  kind: string;
+  title: string;
+  summary: string;
+  createdAt: string;
+  expiresAt: number;
+}
+
 interface ChatInterfaceProps {
   onEmotionChange: (emotion: Emotion) => void;
   onSpeakingChange?: (isSpeaking: boolean) => void;
@@ -108,6 +117,8 @@ export function ChatInterface({
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [showWorkspaceCard, setShowWorkspaceCard] = useState(false);
   const [proactiveSuggestions, setProactiveSuggestions] = useState<string[]>([]);
+  const [pendingActions, setPendingActions] = useState<PendingAssistantAction[]>([]);
+  const [actionBusyId, setActionBusyId] = useState<string | null>(null);
 
   // JARVIS Protocol State
   const [showJarvisModal, setShowJarvisModal] = useState(false);
@@ -469,6 +480,74 @@ export function ChatInterface({
     window.speechSynthesis.speak(utterance);
   };
 
+  const approvePendingAction = async (action: PendingAssistantAction) => {
+    if (!workspaceToken) {
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(), sender: "aarsu",
+        text: "Reconnect Google Workspace before approving this action.",
+        emotion: "confusion", timestamp: new Date()
+      }]);
+      return;
+    }
+    setActionBusyId(action.id);
+    try {
+      const response = await authenticatedFetch("/api/assistant/actions/" + encodeURIComponent(action.id) + "/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceToken })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "The action could not be completed.");
+      setPendingActions(prev => prev.filter(item => item.id !== action.id));
+      const confirmation = result.result?.url
+        ? "Created successfully: " + result.result.url
+        : result.result?.message || (result.title || action.title) + " completed.";
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(), sender: "aarsu",
+        text: confirmation, emotion: "happiness", timestamp: new Date()
+      }]);
+      speak(confirmation);
+    } catch (error: any) {
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(), sender: "aarsu",
+        text: error?.message || "The approved action failed.",
+        emotion: "confusion", timestamp: new Date()
+      }]);
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const cancelPendingAction = async (action: PendingAssistantAction) => {
+    setActionBusyId(action.id);
+    try {
+      const response = await authenticatedFetch("/api/assistant/actions/" + encodeURIComponent(action.id) + "/cancel", {
+        method: "POST"
+      });
+      if (!response.ok) throw new Error("Could not cancel the pending action.");
+      setPendingActions(prev => prev.filter(item => item.id !== action.id));
+    } catch (error) {
+      console.warn("Could not cancel the pending action:", error);
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (!firebaseToken) {
+      setPendingActions([]);
+      return;
+    }
+    let active = true;
+    authenticatedFetch("/api/assistant/actions/pending")
+      .then(response => response.ok ? response.json() : { actions: [] })
+      .then(data => {
+        if (active && Array.isArray(data.actions)) setPendingActions(data.actions);
+      })
+      .catch(error => console.warn("Could not load pending assistant actions:", error));
+    return () => { active = false; };
+  }, [firebaseToken]);
+
   const handleSend = async (text: string = input) => {
     if (!text.trim()) return;
     
@@ -521,7 +600,7 @@ export function ChatInterface({
         }
       }
 
-      const res = await authenticatedFetch('/api/chat', {
+      const res = await authenticatedFetch('/api/assistant/execute', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -540,6 +619,13 @@ export function ChatInterface({
       }
 
       const data = await res.json();
+      if (Array.isArray(data.pendingActions) && data.pendingActions.length) {
+        setPendingActions(prev => {
+          const merged = new Map(prev.map(action => [action.id, action]));
+          data.pendingActions.forEach((action: PendingAssistantAction) => merged.set(action.id, action));
+          return Array.from(merged.values()).slice(-10);
+        });
+      }
       
       const aiMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
@@ -859,7 +945,7 @@ export function ChatInterface({
             </div>
             <p className="text-sm font-semibold text-slate-200">Talk with Aarsu</p>
             <p className="text-xs text-slate-400 max-w-xs leading-relaxed">
-              Her face is right beside you on stage. Type or tap the microphone to speak, and she will respond in her soft, gentle girl voice!
+              Ask Aarsu to research, inspect your schedule, prepare drafts or create documents. Workspace changes always require your approval.
             </p>
 
             {/* Quick Vision & Sight Suggestion Chips */}
@@ -917,6 +1003,35 @@ export function ChatInterface({
             </div>
           </div>
         ))}
+
+        {pendingActions.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-[10px] uppercase tracking-wider text-amber-300 font-semibold">Actions awaiting your approval</div>
+            {pendingActions.map(action => (
+              <div key={action.id} className="rounded-xl border border-amber-500/40 bg-amber-950/20 p-3 space-y-2">
+                <div className="text-xs font-semibold text-amber-100">{action.title}</div>
+                <div className="text-[11px] text-slate-300">{action.summary}</div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => approvePendingAction(action)}
+                    disabled={actionBusyId !== null}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-[11px] disabled:opacity-50"
+                  >
+                    {actionBusyId === action.id ? "Working..." : "Approve and execute"}
+                  </button>
+                  <button
+                    onClick={() => cancelPendingAction(action)}
+                    disabled={actionBusyId !== null}
+                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] disabled:opacity-50"
+                  >
+                    Reject
+                  </button>
+                </div>
+                <div className="text-[9px] text-slate-500">Expires in 10 minutes. No changes occur until you approve.</div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {isLoading && (
           <div className="flex justify-start">
