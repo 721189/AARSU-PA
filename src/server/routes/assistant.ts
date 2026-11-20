@@ -46,8 +46,10 @@ export function createAssistantRouter(getAI: () => GoogleGenAI) {
       );
       return res.json(result);
     } catch (error: any) {
-      console.error("Assistant execution error:", error);
-      return res.status(500).json({ error: error?.message || "Assistant execution failed." });
+      const message = error?.message || "Assistant execution failed.";
+      const status = String(message).startsWith("Unsupported assistant domain") ? 400 : 500;
+      if (status === 500) console.error("Assistant execution error:", error);
+      return res.status(status).json({ error: message });
     }
   });
 
