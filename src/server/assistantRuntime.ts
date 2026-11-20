@@ -109,17 +109,21 @@ async function createPendingAction(uid: string, kind: WorkspaceActionKind, args:
     const event = validateCalendarEventInput(args);
     args = event as unknown as Record<string, unknown>;
     title = "Create calendar event: " + event.summary;
-    summary = event.startDateTime + " to " + event.endDateTime + " (" + event.timeZone + ")";
+    summary = "When: " + event.startDateTime + " to " + event.endDateTime + " (" + event.timeZone + ")"
+      + "\nDescription: " + (event.description || "(none)");
   } else if (kind === "create_gmail_draft") {
     const draft = validateGmailDraftInput(args);
     args = draft as unknown as Record<string, unknown>;
     title = "Create Gmail draft: " + draft.subject;
-    summary = "To: " + draft.to.join(", ") + ". A draft will be saved; it will not be sent.";
+    summary = "To: " + draft.to.join(", ")
+      + "\nSubject: " + draft.subject
+      + "\n\nMessage body:\n" + draft.body
+      + "\n\nThis creates an unsent draft; it will not send email.";
   } else {
     const document = validateGoogleDocInput(args);
     args = document as unknown as Record<string, unknown>;
     title = "Create Google Doc: " + document.title;
-    summary = "Create a document containing approximately " + document.body.length + " characters.";
+    summary = "Title: " + document.title + "\n\nDocument content:\n" + document.body;
   }
   const action: PendingAssistantAction = {
     id, kind, title, summary, args, status: "pending",
