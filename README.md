@@ -1,145 +1,108 @@
-# 🌟 Aarsu: Enterprise Cognitive Agent & J.A.R.V.I.S. Command Core
+# Aarsu — cross-domain personal AI assistant
 
-[![AI Studio Build](https://img.shields.io/badge/Engine-Google%20Gemini%203.5%20%2F%203.8-blueviolet?style=for-the-badge&logo=google)](https://aistudio.google.com)
-[![Architecture](https://img.shields.io/badge/Architecture-MCP%20Hub%20%2B%20Reinforcement%20Learning-blue?style=for-the-badge)](https://modelcontextprotocol.io)
-[![Security](https://img.shields.io/badge/Security-Firebase%20Auth%20%2B%20OAuth%202.0-green?style=for-the-badge&logo=firebase)](https://firebase.google.com)
-[![Build Status](https://img.shields.io/badge/Build-Passing%20(Vite%20%2B%20TypeScript)-success?style=for-the-badge)](https://vitejs.dev)
+Aarsu is an early-stage personal AI assistant with a JARVIS-inspired interface. It combines a React + Express application, Gemini reasoning, Firebase authentication and memory, browser voice/camera input, grounded research, and optional Google Workspace tools.
 
----
+The goal is a useful assistant across research, engineering, learning, writing, data analysis, productivity, and strategy—not a claim of unrestricted autonomous computer control.
 
-## 🧭 Executive Summary
+## Operating modes
 
-**Aarsu** is an enterprise-grade, highly autonomous cognitive operating system and J.A.R.V.I.S. command core designed to synchronize human intent with multi-agent orchestration, proactive task scheduling, Model Context Protocol (MCP) integrations, reinforcement learning feedback loops, and hands-free voice execution. 
+The chat interface provides eight modes:
 
-Built with **Google Gemini 3.5 / 3.8 Flash** and **Imagen 3.0**, Aarsu delivers real-time spatial computing, biometric HUD overlays, secure Firebase authentication, Google Workspace sync, and an immutable knowledge graph.
+- **Auto** — infer the most useful workflow from the request.
+- **Research** — source-led research, evidence comparison, and synthesis.
+- **Engineering** — architecture, debugging, security, and technical delivery.
+- **Learning** — explanations, study plans, worked examples, and practice.
+- **Writing** — drafting, editing, and communication.
+- **Data analysis** — spreadsheets, calculations, statistics, and interpretation.
+- **Productivity** — calendar, email, Drive, Docs, and Sheets workflows.
+- **Strategy** — planning, prioritization, trade-offs, and execution roadmaps.
 
----
+The selected mode changes the assistant's operating instructions. Auto mode uses a lightweight intent router; users can override it at any time.
 
-## 📊 System Architecture & Data Flow
+## Capabilities in this release
 
-```mermaid
-graph TD
-    subgraph Client Tier [Spatial UI & Voice Engine]
-        UI[React + Tailwind HUD] --> Hotkey[Global Hotkey Engine (Ctrl+Space)]
-        Hotkey --> STT[Continuous Web Speech STT]
-        STT --> Audio[Jarvis Audio Synthesizer]
-    end
+### Research and reasoning
+- Google Search grounding for current and source-dependent questions.
+- A bounded, multi-step tool loop that lets the assistant search, inspect returned data, and then continue with a follow-up tool call.
+- Google-hosted code execution for calculations and code-assisted reasoning in engineering, research, learning, and data-analysis modes. This sandbox does not access the user's computer.
 
-    subgraph Gateway Tier [Express Enterprise Gateway]
-        Gateway[Express Server.ts] --> Auth[Firebase Token & OAuth Verifier]
-        Gateway --> Rate[Rate Limiter & Helmet Security]
-    end
+### Google Workspace (user connects Google OAuth)
+- Read upcoming Calendar events.
+- Search Gmail and return metadata plus short snippets.
+- Search Google Drive by file content/name.
+- Read text from Google Docs (up to 15,000 characters).
+- Read the first worksheet of a Google Spreadsheet, bounded to `A1:Z500` and a maximum response size.
+- Prepare Calendar events, Gmail drafts, and Google Docs behind an explicit approval step.
 
-    subgraph Intelligence Core [Google GenAI SDK]
-        Auth --> Gemini[Gemini 3.5 / 3.8 Flash]
-        Auth --> Imagen[Imagen 3.0 Visual Synthesizer]
-        Gemini --> MCP[MCP Hub (GitHub, Slack, Filesystem)]
-        Gemini --> RL[Reinforcement Learning Feedback Loop]
-    end
+Google Workspace reads are read-only. Calendar event creation, Gmail draft creation, and Google Doc creation are saved as pending actions; the user sees the complete preview and must approve before execution. Gmail drafts are never sent.
 
-    subgraph Persistence & Sync Tier
-        Gemini --> DB[(PostgreSQL / Cloud SQL + Firestore)]
-        Gemini --> Graph[Knowledge Graph & Redis Cache]
-        Gemini --> Daemon[Proactive Calendar & Email Daemon]
-    end
-```
+### Personal interface
+- User-scoped Firestore conversation memory.
+- Browser speech recognition and speech synthesis. Listening begins through explicit user action; this is not a native always-on wake-word engine.
+- Camera snapshot analysis after explicit browser permission.
+- Per-user simulated IoT demo devices and user-reported/simulated telemetry.
 
----
+## Action safety and data boundaries
 
-## 📈 Infographic: Core Capabilities Matrix
+Aarsu does not send email, make purchases, delete user data, run shell commands on the user's computer, or control physical devices. The IoT bridge is simulated. Default biometric values are simulated and are not readings from a wearable or medical device.
 
-```
-+-------------------------------------------------------------------------------------------------+
-|                                 AARSU COGNITIVE ENGINE V3.0                                     |
-+---------------------------------+-------------------------------+-------------------------------+
-| 🎙️ Hands-Free Voice Control     | 🧠 Reinforcement Learning     | 🔌 Modular MCP Hub            |
-| • Global Hotkey (Ctrl + Space)  | • Policy Reward Optimization  | • GitHub, Slack, Filesystem   |
-| • Always-on STT & Wake Word     | • User Feedback Reward Tuning | • Enterprise Connection Mgr   |
-| • Jarvis Arc Pulse Audio FX     | • Automated Agent Adaptation  | • Secure Sandbox Isolation    |
-+---------------------------------+-------------------------------+-------------------------------+
-| 📅 Proactive Daemon             | 🛡️ Enterprise Security       | 🖼️ Real-Time 3D Vision        |
-| • Calendar & Email Parsing      | • Firebase Auth + ID Tokens   | • Imagen 3.0 Photo Generation |
-| • Pre-Meeting Brief Generator   | • RBAC & Encrypted Vault      | • Spatial HUD Holographic UI  |
-| • Autonomous Task Scheduling    | • OAuth 2.0 Google Workspace  | • Multi-Modal Embeddings      |
-+---------------------------------+-------------------------------+-------------------------------+
-```
+The assistant's Workspace tool loop is bounded to four rounds and five declared tool calls per round. Read operations can run directly. Creating a Calendar event, Gmail draft, or Google Doc always requires explicit approval of the exact preview. Approval requests are isolated to the authenticated Firebase user's Firestore subcollection and expire after ten minutes.
 
----
+Retrieved memory is supplied as context, not as instructions. Personal Workspace data is accessed only through the Google account whose OAuth access token is provided for that request.
 
-## 📋 Feature Comparison Table
+## Stack
 
-| Feature Capability | Traditional Assistants | Aarsu Cognitive Core (J.A.R.V.I.S.) |
-| :--- | :--- | :--- |
-| **Trigger Mechanism** | Manual mouse click / button tap | Global Hotkey (`Ctrl + Space`) & Wake Word detection |
-| **Model Backend** | Static prompts, single-turn | Multi-model Gemini 3.5/3.8 Flash with automatic fallback |
-| **Context Integration** | Isolated local history | Immutable Knowledge Graph & Redis Caching |
-| **Proactive Intelligence** | Reactive query-response | Autonomous daemon scanning calendar & emails for prep |
-| **External Integrations** | Hardcoded API keys | Model Context Protocol (MCP) modular bridge |
-| **Voice Feedback** | Standard browser speech | Spatial arc pulse audio & emotional viseme synchronization |
-| **Security & Auth** | Basic session cookies | Firebase ID tokens + Google Workspace OAuth 2.0 |
+- React 19, TypeScript, Vite, Tailwind CSS and React Three Fiber
+- Node.js and Express
+- Google Gen AI SDK
+- Firebase Authentication and Firestore
+- Google APIs: Calendar, Gmail, Drive, Docs and Sheets
+- Helmet, CORS and Express rate limiting
 
----
+## Setup
 
-## 🛠️ Technical Stack
+1. Install dependencies with `npm install`.
+2. Create an environment file from `.env.example`.
+3. Configure `GEMINI_API_KEY`.
+4. Configure Firebase client settings and Firebase Admin credentials. Admin credentials must be supplied through the deployment environment and must never be committed.
+5. Set `APP_URL` to the public app origin and `VITE_OAUTH_CLIENT_ID` to the Google OAuth Web Client ID.
+6. Configure the Google OAuth consent screen and authorized JavaScript origins.
+7. Run `npm run dev`.
 
-- **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Lucide Icons, Canvas 3D Particle HUD.
-- **Backend**: Node.js, Express, TypeScript, `@google/genai` (Gemini 3.5/3.8 Flash, Imagen 3.0).
-- **Security**: Helmet, Express Rate Limit, Firebase Authentication, OAuth 2.0 Bearer tokens.
-- **Intelligence**: Reinforcement learning feedback loop, MCP connector daemons, Knowledge Graph vector embeddings.
+### Google Workspace OAuth scopes
 
----
+The client requests Gmail read-only + compose, Calendar events, Drive read-only, Google Docs, and Google Sheets read-only scopes. Users may need to reconnect Workspace and grant the updated scopes after deployment. Use the narrowest practical scopes for your deployment.
 
-## 🔌 Model Context Protocol (MCP) Hub
+## API endpoints
 
-Aarsu implements a robust MCP architecture allowing seamless connection to external developer tools and data silos:
+- `GET /api/assistant/capabilities` — available operating modes, tools, and explicit limitations.
+- `POST /api/assistant/execute` — run a domain-aware assistant turn.
+- `GET /api/assistant/actions/pending` — list the authenticated user's pending approvals.
+- `POST /api/assistant/actions/:actionId/approve` — approve and execute a previewed Workspace action.
+- `POST /api/assistant/actions/:actionId/cancel` — reject a pending action.
+- `GET /api/mcp/tools` and `POST /api/mcp/tools/call` — Aarsu's application-specific authenticated HTTP tool gateway. This is not a standalone MCP transport server.
 
-1. **GitHub MCP**: Autonomous repository inspection, issue tracking, and PR summarization.
-2. **Slack MCP**: Real-time channel message parsing, triage, and automated replies.
-3. **Local Filesystem MCP**: Secure directory indexing, code search, and file manipulation.
+## Commands
 
----
+- `npm run dev` — Express + Vite development server
+- `npm run lint` — TypeScript check
+- `npm test` — validation and domain-routing tests
+- `npm run build` — frontend and server build
+- `npm start` — production server
 
-## 🚀 Quick Start & Installation
+## Infrastructure status
 
-1. **Clone and Install Dependencies**:
-   ```bash
-   git clone https://github.com/aarsu/aarsu-cognitive-core.git
-   cd aarsu-cognitive-core
-   npm install
-   ```
+- The cache is a process-local JavaScript Map with TTL cleanup, not managed Redis.
+- The IoT bridge is an in-memory, per-user simulation.
+- Proactive suggestions and pending approvals are stored in per-user Firestore subcollections when Firestore is configured.
+- Automated backups are not enabled. Configure and test Firestore export and restore before storing production data.
 
-2. **Configure Environment Variables**:
-   Create a `.env` file in the root directory:
-   ```env
-   GEMINI_API_KEY=your_google_genai_api_key_here
-   PORT=3000
-   ```
+## Current limitations
 
-3. **Run Development Server**:
-   ```bash
-   npm run dev
-   ```
+Aarsu is not a complete Iron Man J.A.R.V.I.S. system. It currently has no arbitrary local computer/terminal control, native always-on wake-word engine, real wearable telemetry, physical IoT integration, outbound email sending, autonomous purchasing, or unattended background task execution. It does not yet ingest arbitrary PDFs or local files. Google Sheets reading is limited to the first worksheet and the range listed above. GitHub, Slack, browser automation, and third-party domain connectors are not yet integrated into the app.
 
-4. **Production Build**:
-   ```bash
-   npm run build
-   npm start
-   ```
+New integrations should use least-privilege credentials, per-user isolation, explicit approvals for side effects, audit trails, bounded tool execution, and live integration tests.
 
----
+## License
 
-## 📜 API Endpoints Reference
-
-| Endpoint | Method | Description |
-| :--- | :--- | :--- |
-| `/api/health` | `GET` | System health check and uptime monitor |
-| `/api/chat` | `POST` | Primary cognitive generation with Gemini 3.5/3.8 flash |
-| `/api/image/generate` | `POST` | High-fidelity 3D realistic image generation via Imagen 3.0 |
-| `/api/mcp/connect` | `POST` | Establish MCP bridge to GitHub, Slack, or Filesystem |
-| `/api/reinforcement/reward` | `POST` | Submit reward feedback for reinforcement learning loop |
-
----
-
-## 📄 License
-
-Licensed under the MIT License. Built with ❤️ for enterprise cognitive excellence.
+No license file is currently included. Add a LICENSE file before distributing or accepting external contributions.

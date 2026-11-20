@@ -37,8 +37,8 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
     const decodedToken = await getAuth().verifyIdToken(token);
     req.user = decodedToken;
     
-    // Defaulting role to 'user' since we removed Admin DB access
-    req.userRole = 'user';
+    // Only server-issued Firebase custom claims can grant admin access.
+    req.userRole = decodedToken.admin === true || decodedToken.role === "admin" ? "admin" : "user";
     
     next();
   } catch (error: any) {

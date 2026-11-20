@@ -35,7 +35,6 @@ class AssociativeKnowledgeGraph {
       { id: 'aarsu-system', label: 'Aarsu Companion Engine', type: 'project', properties: { framework: 'React + Node.js + Gemini', version: '2.4.0' }, lastUpdated: new Date().toISOString() },
       { id: 'iron-legion', label: 'Autonomous Agent Swarm', type: 'project', properties: { agents: ['Sentinel', 'Architect', 'Tactician'] }, lastUpdated: new Date().toISOString() },
       { id: 'google-grounding', label: 'Google Search & Code Execution', type: 'concept', properties: { provider: 'Google Cloud Pro', latency: '<350ms' }, lastUpdated: new Date().toISOString() },
-      { id: 'user-profile', label: 'Primary User Identity', type: 'preference', properties: { privilege: 'Stark Admin (Alpha Protocol)' }, lastUpdated: new Date().toISOString() }
     ];
 
     defaultNodes.forEach(node => this.nodes.set(node.id, node));
@@ -43,8 +42,7 @@ class AssociativeKnowledgeGraph {
     this.edges = [
       { id: 'e1', source: 'aarsu-system', target: 'arc-reactor', relation: 'DEPENDS_ON', weight: 0.95 },
       { id: 'e2', source: 'aarsu-system', target: 'iron-legion', relation: 'TRIGGERS', weight: 0.90 },
-      { id: 'e3', source: 'iron-legion', target: 'google-grounding', relation: 'ASSOCIATED_WITH', weight: 0.85 },
-      { id: 'e4', source: 'user-profile', target: 'aarsu-system', relation: 'CREATED_BY', weight: 1.0 }
+      { id: 'e3', source: 'iron-legion', target: 'google-grounding', relation: 'ASSOCIATED_WITH', weight: 0.85 }
     ];
   }
 
