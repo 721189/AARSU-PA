@@ -6,39 +6,40 @@ import { mcpServer } from "../mcpServer";
 export function createMcpRouter(getAI: () => GoogleGenAI) {
   const mcpRouter = Router();
 
-  mcpRouter.get("/tools", requireAuth, (req, res) => {
+  mcpRouter.get("/tools", requireAuth, (_req, res) => {
     res.json({ tools: mcpServer.listTools() });
   });
 
   mcpRouter.post("/tools/call", requireAuth, async (req, res) => {
-    const { name, arguments: toolArgs } = req.body;
-    if (!name) return res.status(400).json({ error: "Tool name required" });
-
+    const { name, arguments: toolArgs } = req.body || {};
+    if (!name || typeof name !== "string") {
+      return res.status(400).json({ error: "Tool name required." });
+    }
     try {
-      const aiClient = getAI();
-      mcpServer.setAIClient(aiClient);
-    } catch {}
-
-    const result = await mcpServer.callTool(name, toolArgs || {});
-    res.json(result);
+      mcpServer.setAIClient(getAI());
+    } catch {
+      // Tools which do not require Gemini can still run.
+    }
+    const result = await mcpServer.callTool(name, toolArgs || {}, req.user!.uid);
+    return res.json(result);
   });
 
-  mcpRouter.get("/resources", requireAuth, (req, res) => {
+  mcpRouter.get("/resources", requireAuth, (_req, res) => {
     res.json({ resources: mcpServer.listResources() });
   });
 
-  mcpRouter.post("/resources/read", requireAuth, (req, res) => {
-    const { uri } = req.body;
-    if (!uri) return res.status(400).json({ error: "Resource URI required" });
-
+  mcpRouter.post("/resources/read", requireAuth, async (req, res) => {
+    const { uri } = req.body || {};
+    if (!uri || typeof uri !== "string") {
+      return res.status(400).json({ error: "Resource URI required." });
+    }
     try {
-      const result = mcpServer.readResource(uri);
-      res.json(result);
-    } catch (err: any) {
-      res.status(404).json({ error: err.message });
+      const result = await mcpServer.readResource(uri, req.user!.uid);
+      return res.json(result);
+    } catch (error: any) {
+      return res.status(404).json({ error: error?.message || "Resource not found." });
     }
   });
 
   return mcpRouter;
 }
-
