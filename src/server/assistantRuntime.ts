@@ -327,18 +327,22 @@ export async function executeAssistantTurn(
 export async function approveAssistantAction(uid: string, actionId: string, workspaceToken: string) {
   if (!/^[0-9a-f-]{36}$/i.test(actionId)) throw new Error("Invalid action ID.");
   const reference = actionsCollection(uid).doc(actionId);
-  const action = await getFirestore().runTransaction(async transaction => {
+  const decision = await getFirestore().runTransaction(async transaction => {
     const snapshot = await transaction.get(reference);
     if (!snapshot.exists) throw new Error("Approval request not found.");
     const stored = snapshot.data() as PendingAssistantAction;
     if (stored.status !== "pending") throw new Error("This action is " + stored.status + ".");
     if (stored.expiresAt <= Date.now()) {
-      transaction.update(reference, { status: "expired" });
-      throw new Error("This approval request expired. Ask Aarsu to prepare it again.");
+      transaction.update(reference, { status: "expired", expiredAt: new Date().toISOString() });
+      return { expired: true as const };
     }
     transaction.update(reference, { status: "executing", approvedAt: new Date().toISOString() });
-    return stored;
+    return { action: stored };
   });
+  if ("expired" in decision) {
+    throw new Error("This approval request expired. Ask Aarsu to prepare it again.");
+  }
+  const action = decision.action;
   try {
     const result = await executeApprovedWorkspaceAction(action, workspaceToken);
     await reference.update({ status: "completed", completedAt: new Date().toISOString(), result });
