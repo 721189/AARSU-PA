@@ -2,6 +2,7 @@ import { Router } from "express";
 import { GoogleGenAI } from "@google/genai";
 import { requireAuth } from "../auth";
 import { config } from "../config";
+import { getAssistantCapabilities } from "../assistantDomains";
 import {
   approveAssistantAction,
   cancelAssistantAction,
@@ -11,6 +12,16 @@ import {
 
 export function createAssistantRouter(getAI: () => GoogleGenAI) {
   const router = Router();
+
+  router.get("/capabilities", requireAuth, (_req, res) => {
+    return res.json({
+      ...getAssistantCapabilities(),
+      integrations: {
+        googleWorkspaceEnabled: config.enableWorkspace,
+        googleWorkspaceConnectedPerRequest: true
+      }
+    });
+  });
 
   router.get("/actions/pending", requireAuth, async (req, res) => {
     try {
@@ -22,13 +33,14 @@ export function createAssistantRouter(getAI: () => GoogleGenAI) {
 
   router.post("/execute", requireAuth, async (req, res) => {
     try {
-      const { message, workspaceToken, memoryContext, imageBase64 } = req.body || {};
+      const { message, workspaceToken, memoryContext, imageBase64, domain } = req.body || {};
       if (typeof message !== "string" || !message.trim()) return res.status(400).json({ error: "Message is required." });
       const token = config.enableWorkspace && typeof workspaceToken === "string" ? workspaceToken : undefined;
       const result = await executeAssistantTurn(
         getAI(), req.user!.uid, message, token,
         typeof memoryContext === "string" ? memoryContext : "",
-        typeof imageBase64 === "string" ? imageBase64 : null
+        typeof imageBase64 === "string" ? imageBase64 : null,
+        domain ?? "auto"
       );
       return res.json(result);
     } catch (error: any) {
