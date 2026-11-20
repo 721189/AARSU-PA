@@ -24,9 +24,19 @@ export function validateCalendarEventInput(value: unknown): CalendarEventInput {
   const endDateTime = requiredString(args.endDateTime, "endDateTime", 64);
   const start = Date.parse(startDateTime);
   const end = Date.parse(endDateTime);
+  const hasExplicitOffset = (value: string) => /(?:Z|[+-]\\d{2}:\\d{2})$/i.test(value);
+  if (!hasExplicitOffset(startDateTime) || !hasExplicitOffset(endDateTime)) {
+    throw new Error("Calendar date-times must include an explicit UTC offset or Z suffix.");
+  }
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error("The calendar event needs valid dates and an end time after its start time.");
   const description = typeof args.description === "string" ? args.description.slice(0, 4000) : "";
-  const timeZone = typeof args.timeZone === "string" && args.timeZone.length <= 64 ? args.timeZone : "Asia/Kolkata";
+  const timeZone = typeof args.timeZone === "string" && args.timeZone.trim() ? args.timeZone.trim() : "Asia/Kolkata";
+  if (timeZone.length > 64) throw new Error("timeZone must be a valid IANA timezone.");
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone }).format(0);
+  } catch {
+    throw new Error("timeZone must be a valid IANA timezone.");
+  }
   return { summary, description, startDateTime, endDateTime, timeZone };
 }
 export interface GmailDraftInput { to: string[]; subject: string; body: string; }
@@ -50,4 +60,25 @@ export function validateGoogleDocInput(value: unknown): GoogleDocInput {
 }
 export function validateGmailSearchQuery(value: unknown): string {
   return requiredString(value, "query", 240);
+}
+
+
+export function validateGoogleDriveQuery(value: unknown): string {
+  return requiredString(value, "query", 160);
+}
+
+export function validateGoogleDocumentId(value: unknown): string {
+  const documentId = requiredString(value, "documentId", 200);
+  if (!/^[A-Za-z0-9_-]{10,200}$/.test(documentId)) {
+    throw new Error("documentId is not a valid Google document identifier.");
+  }
+  return documentId;
+}
+
+export function validateGoogleSpreadsheetId(value: unknown): string {
+  const spreadsheetId = requiredString(value, "spreadsheetId", 200);
+  if (!/^[A-Za-z0-9_-]{10,200}$/.test(spreadsheetId)) {
+    throw new Error("spreadsheetId is not a valid Google spreadsheet identifier.");
+  }
+  return spreadsheetId;
 }
